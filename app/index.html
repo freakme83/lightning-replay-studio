@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lightning Replay Studio</title>
+    <link rel="stylesheet" href="/fonts/fonts.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="mark"></span>Lightning Replay Studio</div>
+      <div id="dataset-badge" class="badge" hidden></div>
+      <div class="spacer"></div>
+      <div class="hint">Space play/pause · ←/→ frame · [ / ] previous/next strike</div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <section>
+          <h2>Dataset</h2>
+          <label class="drop" id="drop">
+            <input type="file" id="file" accept=".json,.csv,application/json,text/csv" />
+            <span><strong>Load CSV / JSON</strong><br />click or drop a file</span>
+          </label>
+          <div class="row">
+            <select id="sample"></select>
+            <button id="load-sample" class="secondary">Load sample</button>
+          </div>
+          <dl id="info" class="info"></dl>
+          <div id="messages"></div>
+        </section>
+
+        <section>
+          <h2>Replay</h2>
+          <label class="field"><span>Video duration <em>s</em></span><input id="duration" type="number" min="2" max="3600" step="1" value="20" /></label>
+          <label class="field"><span>Trail duration <em>storm min</em></span><input id="trail" type="number" min="0" max="1440" step="1" value="20" /></label>
+          <label class="field"><span>Marker size <em id="scale-val">1.0×</em></span><input id="scale" type="range" min="0.5" max="2.5" step="0.1" value="1" /></label>
+          <label class="check"><input id="history" type="checkbox" checked /> Keep faint dot for earlier strikes</label>
+          <details>
+            <summary>Event time range</summary>
+            <p class="note">Blank = dataset window. ISO 8601 with offset, e.g. 2026-11-01T15:00:00+03:00</p>
+            <label class="field stack"><span>Start</span><input id="range-start" type="text" placeholder="auto" /></label>
+            <label class="field stack"><span>End</span><input id="range-end" type="text" placeholder="auto" /></label>
+          </details>
+        </section>
+
+        <section>
+          <h2>Map <span id="bounds-mode" class="pill">auto-fit</span></h2>
+          <div class="bounds">
+            <label><span>N</span><input id="b-north" type="number" step="0.01" /></label>
+            <label><span>W</span><input id="b-west" type="number" step="0.01" /></label>
+            <label><span>E</span><input id="b-east" type="number" step="0.01" /></label>
+            <label><span>S</span><input id="b-south" type="number" step="0.01" /></label>
+          </div>
+          <div class="row">
+            <button id="fit" class="secondary">Fit map to data</button>
+            <button id="apply-bounds" class="secondary">Apply bounds</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Export</h2>
+          <div class="row">
+            <select id="quality">
+              <option value="draft">Draft (fast)</option>
+              <option value="looks" selected>Standard</option>
+              <option value="delivery">High</option>
+            </select>
+            <button id="export">Export MP4</button>
+          </div>
+          <p class="note">960 × 540 · 24 fps · H.264, rendered locally by HyperFrames.</p>
+          <div id="export-status" class="export-status"></div>
+        </section>
+      </aside>
+
+      <section class="stage-col">
+        <div class="stage" id="stage">
+          <canvas id="canvas"></canvas>
+          <div id="empty" class="empty">Load a dataset or a sample to begin.</div>
+        </div>
+        <div class="transport">
+          <button id="prev" class="icon" title="Previous strike ([)">⏮</button>
+          <button id="play" class="icon play" title="Play / pause (space)">▶</button>
+          <button id="next" class="icon" title="Next strike (])">⏭</button>
+          <input id="scrub" type="range" min="0" max="20" step="any" value="0" />
+          <div id="readout" class="readout">—</div>
+        </div>
+        <div class="events">
+          <div class="events-head">
+            <h2>Strikes <span id="ev-count"></span></h2>
+            <input id="ev-filter" type="search" placeholder="Find by id, time or type…" />
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>#</th><th>id</th><th>local time</th><th>type</th><th>intensity</th><th>lat</th><th>lon</th><th>video t</th></tr>
+              </thead>
+              <tbody id="ev-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

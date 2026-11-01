@@ -1,0 +1,22 @@
+node_modules/
+work/
+exports/
+.hyperframes/
+.DS_Store
+
+# Generated video (re-create with `npm run render`)
+*.mp4
+
+# Local tool/agent config and vendored skills (machine-specific; skills pinned in skills-lock.json)
+.claude/
+.agents/
+
+# Secrets and local environment
+.env
+.env.*
+*.pem
+*.key
+
+# Logs and caches
+*.log
+.cache/

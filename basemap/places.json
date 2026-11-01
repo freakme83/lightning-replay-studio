@@ -1,0 +1,26 @@
+{
+  "note": "Reference places for orientation only. Coordinates are approximate town/city centres (about ±1 km). rank 1 = major city, 2 = city, 3 = district/town.",
+  "places": [
+    { "name": "Ankara", "lat": 39.9208, "lon": 32.8541, "rank": 1 },
+    { "name": "İstanbul", "lat": 41.0082, "lon": 28.9784, "rank": 1 },
+    { "name": "İzmir", "lat": 38.4192, "lon": 27.1287, "rank": 1 },
+    { "name": "Bursa", "lat": 40.1885, "lon": 29.0610, "rank": 2 },
+    { "name": "Antalya", "lat": 36.8969, "lon": 30.7133, "rank": 2 },
+    { "name": "Konya", "lat": 37.8746, "lon": 32.4932, "rank": 2 },
+    { "name": "Eskişehir", "lat": 39.7767, "lon": 30.5206, "rank": 2 },
+    { "name": "Kayseri", "lat": 38.7205, "lon": 35.4826, "rank": 2 },
+    { "name": "Samsun", "lat": 41.2867, "lon": 36.3300, "rank": 2 },
+    { "name": "Trabzon", "lat": 41.0027, "lon": 39.7168, "rank": 2 },
+    { "name": "Adana", "lat": 37.0000, "lon": 35.3213, "rank": 2 },
+    { "name": "Kırıkkale", "lat": 39.8468, "lon": 33.5153, "rank": 2 },
+    { "name": "Sincan", "lat": 39.9750, "lon": 32.5800, "rank": 3 },
+    { "name": "Etimesgut", "lat": 39.9570, "lon": 32.6840, "rank": 3 },
+    { "name": "Gölbaşı", "lat": 39.7890, "lon": 32.8060, "rank": 3 },
+    { "name": "Kahramankazan", "lat": 40.2050, "lon": 32.6840, "rank": 3 },
+    { "name": "Pursaklar", "lat": 40.0370, "lon": 32.9000, "rank": 3 },
+    { "name": "Çubuk", "lat": 40.2380, "lon": 33.0320, "rank": 3 },
+    { "name": "Elmadağ", "lat": 39.9210, "lon": 33.2310, "rank": 3 },
+    { "name": "Polatlı", "lat": 39.5840, "lon": 32.1470, "rank": 3 },
+    { "name": "Esenboğa Airport", "lat": 40.1280, "lon": 32.9950, "rank": 3 }
+  ]
+}
