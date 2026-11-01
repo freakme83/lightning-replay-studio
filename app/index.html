@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lightning Replay Studio</title>
     <link rel="stylesheet" href="/fonts/fonts.css" />
+    <link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -46,17 +47,27 @@
         </section>
 
         <section>
-          <h2>Map <span id="bounds-mode" class="pill">auto-fit</span></h2>
-          <div class="bounds">
-            <label><span>N</span><input id="b-north" type="number" step="0.01" /></label>
-            <label><span>W</span><input id="b-west" type="number" step="0.01" /></label>
-            <label><span>E</span><input id="b-east" type="number" step="0.01" /></label>
-            <label><span>S</span><input id="b-south" type="number" step="0.01" /></label>
-          </div>
+          <h2>Map frame <span id="frame-mode" class="pill">editing</span></h2>
+          <p class="note" id="frame-help">Drag to pan, scroll or +/− to zoom. The bright rectangle is the 16:9 video frame.</p>
           <div class="row">
-            <button id="fit" class="secondary">Fit map to data</button>
-            <button id="apply-bounds" class="secondary">Apply bounds</button>
+            <button id="fit" class="secondary" title="Frame all strikes in the selected time range">Fit to Data</button>
+            <button id="lock">Lock Frame</button>
           </div>
+          <div id="map-state" class="map-state"></div>
+          <label class="check" id="outline-row" hidden><input id="use-outline" type="checkbox" /> Use offline outline map (Natural Earth) for export</label>
+          <details>
+            <summary>Exact frame edges (advanced)</summary>
+            <div class="bounds">
+              <label><span>N</span><input id="b-north" type="number" step="0.01" /></label>
+              <label><span>W</span><input id="b-west" type="number" step="0.01" /></label>
+              <label><span>E</span><input id="b-east" type="number" step="0.01" /></label>
+              <label><span>S</span><input id="b-south" type="number" step="0.01" /></label>
+            </div>
+            <div class="row">
+              <button id="apply-bounds" class="secondary">Show these edges</button>
+            </div>
+            <p class="note">Edges are widened on one axis to keep the 16:9 video shape.</p>
+          </details>
         </section>
 
         <section>
@@ -69,14 +80,17 @@
             </select>
             <button id="export">Export MP4</button>
           </div>
-          <p class="note">960 × 540 · 24 fps · H.264, rendered locally by HyperFrames.</p>
+          <p class="note">960 × 540 · 24 fps · H.264, rendered locally by HyperFrames with the locked map frame.</p>
           <div id="export-status" class="export-status"></div>
         </section>
       </aside>
 
       <section class="stage-col">
         <div class="stage" id="stage">
-          <canvas id="canvas"></canvas>
+          <div id="map" class="map"></div>
+          <div id="frame-guide" class="frame-guide"><span class="frame-label">VIDEO FRAME · 960×540 · 16:9</span></div>
+          <canvas id="canvas" hidden></canvas>
+          <div id="stage-status" class="stage-status" hidden></div>
           <div id="empty" class="empty">Load a dataset or a sample to begin.</div>
         </div>
         <div class="transport">

@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 // Lightning Replay Studio: local web server (127.0.0.1 only, no external services).
-// Serves the preview app and runs MP4 exports through the local HyperFrames renderer.
+// Serves the preview app, prepares map basemaps (headless MapLibre, one PNG per locked
+// frame) and runs MP4 exports through the local HyperFrames renderer.
 //
 //   npm start            → http://127.0.0.1:4317
 import { createServer } from "node:http";
 import { readFile, stat, mkdir } from "node:fs/promises";
-import { readdirSync, existsSync, rmSync } from "node:fs";
+import { readdirSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { join, extname, normalize, sep } from "node:path";
 import { buildComposition, ROOT } from "./src/export/composition.js";
 import { renderComposition, probeVideo, checkVideo } from "./src/export/render.js";
+import { renderBasemap, MapPrepError } from "./src/map/render-basemap.js";
+import { normalizeSettings } from "./src/core/replay.js";
+import { DEFAULT_PROVIDER, getProvider } from "./src/map/providers.js";
 
 const PORT = Number(process.env.PORT ?? 4317);
 const HOST = "127.0.0.1";
@@ -16,6 +20,7 @@ const HOST = "127.0.0.1";
 const TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".csv": "text/csv; charset=utf-8",
@@ -26,8 +31,12 @@ const TYPES = {
 };
 
 // URL prefix → directory. Nothing outside these folders is served.
+const BASEMAP_DIR = join(ROOT, "work", "basemaps");
 const MOUNTS = {
   "/src/core/": join(ROOT, "src", "core"),
+  "/src/map/": join(ROOT, "src", "map"),
+  "/vendor/maplibre/": join(ROOT, "node_modules", "maplibre-gl", "dist"),
+  "/basemaps/": BASEMAP_DIR,
   "/basemap/": join(ROOT, "basemap"),
   "/data/": join(ROOT, "data"),
   "/fonts/": join(ROOT, "assets", "fonts"),
@@ -88,8 +97,31 @@ function safeName(s) {
   return String(s || "replay").replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 60) || "replay";
 }
 
-async function startExport({ text, filename, settings, quality }) {
+/** Prepared basemap by id (from /api/basemap), or null. */
+function loadBasemap(id) {
+  if (!/^[0-9a-f]{20}$/.test(String(id))) return null;
+  const png = join(BASEMAP_DIR, `${id}.png`), meta = join(BASEMAP_DIR, `${id}.json`);
+  if (!existsSync(png) || !existsSync(meta)) return null;
+  return { png: readFileSync(png), meta: JSON.parse(readFileSync(meta, "utf8")) };
+}
+
+/**
+ * The map an export uses must be chosen explicitly: a prepared basemap, or the offline
+ * Natural Earth outlines. A missing or failed map never silently becomes a blank background.
+ */
+function resolveExportMap(map) {
+  if (map?.basemapId) {
+    const b = loadBasemap(map.basemapId);
+    if (!b) throw new Error("The prepared map is no longer available. Lock the frame again to re-prepare it.");
+    return b;
+  }
+  if (map?.fallback === "outline") return null;
+  throw new Error("No map prepared for this frame. Lock the frame (needs internet for map tiles), or tick “Use offline outline map” to export with the Natural Earth fallback.");
+}
+
+async function startExport({ text, filename, settings, quality, map }) {
   if (running) throw new Error("An export is already running. Wait for it to finish.");
+  const mapImage = resolveExportMap(map);
   const id = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const name = `${safeName(filename)}-${settings?.duration ?? 20}s-${id}.mp4`;
   const job = { id, status: "building", log: "", output: `/exports/${name}`, startedAt: Date.now(), probe: null, problems: null, error: null };
@@ -98,7 +130,7 @@ async function startExport({ text, filename, settings, quality }) {
   const outFile = join(ROOT, "exports", name);
   await mkdir(join(ROOT, "exports"), { recursive: true });
   // Validate synchronously so bad settings fail the request instead of the job.
-  const { model } = buildComposition({ text, filename, settings, outDir: workDir });
+  const { model } = buildComposition({ text, filename, settings, outDir: workDir, mapImage });
   running = job;
   job.status = "rendering";
   job.settings = model.settings;
@@ -126,6 +158,27 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/api/samples" && req.method === "GET") {
       const files = existsSync(join(ROOT, "data")) ? readdirSync(join(ROOT, "data")).filter((f) => /\.(json|csv)$/i.test(f)) : [];
       return json(res, 200, { files });
+    }
+    if (url.pathname === "/api/map-config" && req.method === "GET") {
+      const p = getProvider(DEFAULT_PROVIDER);
+      return json(res, 200, { provider: p.id, label: p.label, attribution: p.attribution, styleUrl: process.env.LR_MAP_STYLE_URL || p.styleUrl });
+    }
+    if (url.pathname === "/api/basemap" && req.method === "POST") {
+      const body = JSON.parse(await readBody(req, 5e6));
+      let s;
+      try {
+        s = normalizeSettings({ frame: body.frame, width: body.width, height: body.height });
+        if (!s.frame) throw new Error("A map frame is required.");
+      } catch (e) {
+        return json(res, 400, { error: e.message });
+      }
+      try {
+        const probes = Array.isArray(body.probes) ? body.probes.filter((p) => Array.isArray(p) && p.every(Number.isFinite)) : [];
+        const { meta, cached } = await renderBasemap({ frame: s.frame, width: s.width, height: s.height, provider: body.provider, probes, cacheDir: BASEMAP_DIR });
+        return json(res, 200, { ...meta, url: `/basemaps/${meta.id}.png`, cached });
+      } catch (e) {
+        return json(res, e instanceof MapPrepError ? 502 : 500, { error: e.message });
+      }
     }
     if (url.pathname === "/api/export" && req.method === "POST") {
       const body = JSON.parse(await readBody(req));

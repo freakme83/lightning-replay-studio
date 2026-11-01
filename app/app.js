@@ -1,9 +1,12 @@
 // Lightning Replay Studio — interactive preview.
 // Uses the same core modules (parse → buildReplay → drawFrame) as the exported video.
+// Map workflow: compose (interactive map + frame guide) → Lock Frame → the server bakes
+// one basemap PNG for that exact frame → preview and export both draw that PNG.
 import { parseDataset, formatLocal, formatOffset, toIsoWithOffset } from "/src/core/parse.js";
-import { buildReplay, DEFAULTS, resolveTimeRange } from "/src/core/replay.js";
-import { autoBounds } from "/src/core/projection.js";
+import { buildReplay, DEFAULTS, normalizeSettings, resolveTimeRange } from "/src/core/replay.js";
+import { autoBounds, frameProjection } from "/src/core/projection.js";
 import { drawFrame } from "/src/core/draw.js";
+import { createComposer } from "./composer.js";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
@@ -17,7 +20,12 @@ const state = {
   geo: null,
   t: 0,
   playing: false,
-  bounds: null, // null = auto-fit
+  frame: null, // {west, south, east, north} of the whole video frame
+  mode: "compose", // "compose" (editing the frame on the map) | "locked"
+  mapImage: null, // { image, attribution, id, meta } once the basemap for the locked frame is baked
+  mapError: null,
+  lockToken: 0,
+  composer: null,
   selected: null,
   lastRowNow: -1,
 };
@@ -43,7 +51,7 @@ function readSettings() {
     trailMinutes: Number($("trail").value),
     markerScale: Number($("scale").value),
     showHistory: $("history").checked,
-    bounds: state.bounds,
+    frame: state.frame,
     timeRange: start || end ? { start: start || null, end: end || null } : null,
     fps: DEFAULTS.fps,
     width: DEFAULTS.width,
@@ -64,7 +72,7 @@ function rebuild({ keepTime = true } = {}) {
   if (!state.dataset?.ok) return;
   const frac = state.model ? state.t / state.model.settings.duration : 0;
   try {
-    state.model = buildReplay(state.dataset, readSettings(), state.geo);
+    state.model = buildReplay(state.dataset, readSettings(), { ...state.geo, mapImage: state.mapImage });
   } catch (e) {
     $("messages").querySelectorAll(".msg.settings").forEach((n) => n.remove());
     message("error settings", esc(e.message));
@@ -77,10 +85,8 @@ function rebuild({ keepTime = true } = {}) {
   state.t = keepTime ? Math.min(m.settings.duration, frac * m.settings.duration) : Math.floor(m.timeMap.leadIn * fps) / fps;
   $("scrub").max = m.settings.duration;
   $("scale-val").textContent = `${m.settings.markerScale.toFixed(1)}×`;
-  const b = m.bounds;
-  for (const k of ["north", "west", "east", "south"]) $(`b-${k}`).value = b[k].toFixed(3);
-  $("bounds-mode").textContent = state.bounds ? "custom" : "auto-fit";
-  $("bounds-mode").classList.toggle("custom", !!state.bounds);
+  showFrameEdges(m.extent);
+  state.composer?.setStrikes(m.events);
   if (state.selected) state.selected = m.events.find((e) => e.index === state.selected.index) ?? null;
   renderTable();
   updateInfo();
@@ -97,17 +103,20 @@ function loadText(text, filename) {
   state.text = text;
   state.filename = filename;
   state.dataset = ds;
-  state.bounds = null;
   state.selected = null;
   $("range-start").value = "";
   $("range-end").value = "";
+  state.frame = null; // replaced by Fit to Data below
   if (ds.errors.length)
     message("warn", `${ds.errors.length} of ${ds.totalRecords} record(s) rejected.<details><summary>Show</summary>${ds.errors.map(esc).join("<br>")}</details>`);
   for (const w of ds.warnings) message("warn", esc(w));
   if (ds.meta.description) message("", esc(ds.meta.description));
   $("empty").hidden = true;
   pause();
+  // A new dataset opens in the composer, framed on its strikes.
+  state.frame = fitToDataFrame();
   rebuild({ keepTime: false });
+  enterCompose(state.frame);
 }
 
 function updateInfo() {
@@ -133,6 +142,106 @@ function updateInfo() {
   badge.classList.toggle("real", !ds.meta.synthetic);
   $("range-start").placeholder = toIsoWithOffset(resolveTimeRange(ds, null).start, off);
   $("range-end").placeholder = toIsoWithOffset(resolveTimeRange(ds, null).end, off);
+}
+
+// ---------- map frame ----------
+const W = DEFAULTS.width, H = DEFAULTS.height;
+
+/** Fit to Data: the v1 auto-fit layout (strikes inside the HUD-free area) as a full frame. */
+function fitToDataFrame() {
+  return buildReplay(state.dataset, { ...readSettings(), frame: null }).extent;
+}
+
+function showFrameEdges(f) {
+  if (document.activeElement?.closest?.(".bounds")) return; // don't overwrite while typing
+  for (const k of ["north", "west", "east", "south"]) $(`b-${k}`).value = f[k].toFixed(4);
+}
+
+function setMapState(html) {
+  $("map-state").innerHTML = html;
+}
+
+function stageStatus(text, bad = false) {
+  const el = $("stage-status");
+  el.hidden = !text;
+  el.textContent = text ?? "";
+  el.classList.toggle("bad", bad);
+}
+
+function updateFrameUi() {
+  const locked = state.mode === "locked";
+  const pill = $("frame-mode");
+  const failed = locked && !state.mapImage && state.mapError;
+  pill.textContent = !locked ? "editing" : state.mapImage ? "locked" : failed ? "map failed" : "preparing…";
+  pill.className = `pill ${!locked ? "editing" : failed ? "failed" : "locked"}`;
+  $("lock").textContent = locked ? "Unlock / Edit Frame" : "Lock Frame";
+  $("lock").classList.toggle("secondary", locked);
+  $("frame-guide").hidden = locked;
+  canvas.hidden = !locked;
+  if (locked) sizeCanvas(); // the canvas had no layout size while hidden
+  $("frame-help").textContent = locked
+    ? "Frame locked: the preview below is exactly what the MP4 will show."
+    : "Drag to pan, scroll or +/− to zoom. The bright rectangle is the 16:9 video frame; hatched bands sit under the HUD.";
+  $("outline-row").hidden = !failed && !(state.composer && !state.composer.online());
+  for (const id of ["play", "prev", "next", "scrub"]) $(id).disabled = !locked;
+  updateExportButton();
+}
+
+function updateExportButton() {
+  const ready = state.mode === "locked" && (state.mapImage || $("use-outline").checked);
+  $("export").disabled = !state.dataset || !ready;
+  $("export").title = ready ? "" : state.mode !== "locked" ? "Lock the frame first" : "Map not prepared — tick the offline outline option to export anyway";
+}
+
+function enterCompose(frame) {
+  pause();
+  state.mode = "compose";
+  state.lockToken++;
+  state.mapImage = null;
+  state.mapError = null;
+  stageStatus(null);
+  if (frame) state.composer?.showFrame(frame);
+  state.composer?.setInteractive(true);
+  setMapState(state.composer?.online() === false ? `<span class="bad">Online map unavailable.</span> Framing uses offline outlines.` : "");
+  rebuild();
+  updateFrameUi();
+}
+
+async function lockFrame() {
+  if (!state.dataset) return;
+  if (state.composer) state.frame = state.composer.frame();
+  state.mode = "locked";
+  state.mapImage = null;
+  state.mapError = null;
+  state.composer?.setInteractive(false);
+  const token = ++state.lockToken;
+  rebuild();
+  updateFrameUi();
+  stageStatus("Preparing map for this frame…");
+  setMapState("Preparing map…");
+  try {
+    const res = await fetch("/api/basemap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ frame: state.frame, width: W, height: H, probes: state.model.events.slice(0, 200).map((e) => [e.lon, e.lat]) }),
+    });
+    const meta = await res.json();
+    if (!res.ok) throw new Error(meta.error ?? `Map preparation failed (${res.status}).`);
+    const image = new Image();
+    image.src = meta.url;
+    await image.decode();
+    if (token !== state.lockToken) return; // unlocked meanwhile
+    state.mapImage = { image, attribution: meta.attribution, id: meta.id, meta };
+    stageStatus(null);
+    setMapState(`<span class="ok">Map ready ✓</span> ${esc(meta.provider)} · zoom ${meta.camera.zoom.toFixed(2)} · alignment ${meta.alignment.maxErrorPx < 0.001 ? "&lt;0.001" : meta.alignment.maxErrorPx.toFixed(3)} px${meta.cached ? " · cached" : ""}`);
+  } catch (e) {
+    if (token !== state.lockToken) return;
+    state.mapError = e.message;
+    stageStatus("Map unavailable — previewing offline outlines. Export is blocked until you choose the outline fallback.", true);
+    setMapState(`<span class="bad">${esc(e.message)}</span>`);
+  }
+  rebuild();
+  updateFrameUi();
 }
 
 // ---------- drawing ----------
@@ -234,7 +343,7 @@ function tick(ts) {
   if (state.playing) requestAnimationFrame(tick);
 }
 function play() {
-  if (!state.model) return;
+  if (!state.model || state.mode !== "locked") return;
   if (state.t >= state.model.settings.duration - 1e-3) state.t = 0;
   state.playing = true;
   state.selected = null;
@@ -262,12 +371,18 @@ async function startExport() {
   const res = await fetch("/api/export", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: state.text, filename: state.filename, settings: readSettings(), quality: $("quality").value }),
+    body: JSON.stringify({
+      text: state.text,
+      filename: state.filename,
+      settings: readSettings(),
+      quality: $("quality").value,
+      map: state.mapImage ? { basemapId: state.mapImage.id } : $("use-outline").checked ? { fallback: "outline" } : null,
+    }),
   });
   const body = await res.json();
   if (!res.ok) {
     box.innerHTML = `<span class="bad">${esc(body.error)}</span>`;
-    $("export").disabled = false;
+    updateExportButton();
     return;
   }
   poll(body.id);
@@ -281,7 +396,7 @@ async function poll(id) {
     setTimeout(() => poll(id), 1000);
     return;
   }
-  $("export").disabled = false;
+  updateExportButton();
   if (job.status === "failed") {
     box.innerHTML = `<span class="bad">Export failed.</span><pre>${esc(job.error)}</pre>`;
     return;
@@ -316,10 +431,23 @@ $("load-sample").addEventListener("click", loadSample);
 for (const id of ["duration", "trail", "range-start", "range-end"]) $(id).addEventListener("change", () => rebuild());
 $("scale").addEventListener("input", () => rebuild());
 $("history").addEventListener("change", () => rebuild());
-$("fit").addEventListener("click", () => { state.bounds = null; rebuild(); });
+$("fit").addEventListener("click", () => {
+  if (!state.dataset) return;
+  state.frame = fitToDataFrame();
+  enterCompose(state.frame);
+});
+$("lock").addEventListener("click", () => (state.mode === "locked" ? enterCompose(state.frame) : lockFrame()));
+$("use-outline").addEventListener("change", updateExportButton);
 $("apply-bounds").addEventListener("click", () => {
-  state.bounds = { west: +$("b-west").value, south: +$("b-south").value, east: +$("b-east").value, north: +$("b-north").value };
-  rebuild();
+  const b = { west: +$("b-west").value, south: +$("b-south").value, east: +$("b-east").value, north: +$("b-north").value };
+  try {
+    // Widen to the video's aspect ratio; validates the numbers too.
+    state.frame = frameProjection(normalizeSettings({ frame: b }).frame, W, H).extentOf({ x: 0, y: 0, w: W, h: H });
+  } catch (e) {
+    setMapState(`<span class="bad">${esc(e.message)}</span>`);
+    return;
+  }
+  enterCompose(state.frame);
 });
 $("play").addEventListener("click", () => (state.playing ? pause() : play()));
 $("prev").addEventListener("click", () => stepEvent(-1));
@@ -350,7 +478,35 @@ document.addEventListener("keydown", (e) => {
 new ResizeObserver(() => sizeCanvas()).observe($("stage"));
 
 await Promise.all([loadGeo(), loadFonts(), loadSampleList()]);
+// The map attaches when its style is in; the studio never waits on map tiles.
+setMapState("Loading map…");
+createComposer({
+  container: $("map"),
+  guide: $("frame-guide"),
+  width: W,
+  height: H,
+  basemap: state.geo.basemap,
+  onChange: (frame) => {
+    if (state.mode !== "compose") return;
+    state.frame = frame;
+    showFrameEdges(frame);
+  },
+  onStatus: ({ message }) => setMapState(`<span class="bad">${esc(message)}</span>`),
+})
+  .then((composer) => {
+    state.composer = composer;
+    if (!composer.online()) setMapState(`<span class="bad">Online map unavailable.</span> Framing uses offline outlines.`);
+    else if (state.mode === "compose") setMapState("");
+    if (state.frame) composer.showFrame(state.frame);
+    if (state.model) composer.setStrikes(state.model.events);
+    composer.setInteractive(state.mode === "compose");
+    updateFrameUi();
+  })
+  .catch((e) => {
+    // No interactive map (e.g. WebGL unavailable): frames come from Fit to Data / exact edges.
+    setMapState(`<span class="bad">Interactive map unavailable: ${esc(e.message)}</span>`);
+  });
 await loadSample();
 sizeCanvas();
 // Exposed for automated checks in the browser.
-window.__studio = { state, seekToEvent, autoBounds };
+window.__studio = { state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame };
