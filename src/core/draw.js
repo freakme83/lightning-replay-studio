@@ -49,6 +49,15 @@ function lowerBoundV(events, v) {
 }
 
 function drawBasemap(ctx, m, k) {
+  if (m.mapImage) {
+    // Prepared basemap: rendered for exactly this frame, so it fills the canvas 1:1.
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(m.mapImage.image, 0, 0, m.settings.width, m.settings.height);
+    ctx.restore();
+    return;
+  }
   if (!m.basemap) return;
   ctx.save();
   ctx.lineJoin = "round";
@@ -85,6 +94,8 @@ function drawGrid(ctx, m, k) {
   const W = settings.width, H = settings.height;
   const step = m.niceStep(Math.min(extent.east - extent.west, extent.north - extent.south) / 5, DEG_STEPS);
   ctx.save();
+  // Over a real map the graticule steps back so roads and labels stay readable.
+  if (m.mapImage) ctx.globalAlpha = 0.45;
   ctx.strokeStyle = PALETTE.grid;
   ctx.lineWidth = 1;
   ctx.fillStyle = PALETTE.gridLabel;
@@ -375,11 +386,18 @@ function drawHeader(ctx, m, t, k) {
 function drawFooterNote(ctx, m, k) {
   const W = m.settings.width;
   ctx.save();
-  ctx.font = `${8.5 * k}px ${FONT_MONO}`;
-  ctx.fillStyle = PALETTE.dim;
   ctx.textAlign = "right";
-  const geo = m.basemap ? "Coastlines/borders: Natural Earth 1:50m · " : "";
-  ctx.fillText(`${geo}Web Mercator · places approx.`, W - 24 * k, 86 * k);
+  if (m.mapImage) {
+    // Map data credit required by the tile provider; kept legible in every exported frame.
+    ctx.font = `${9 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.muted;
+    ctx.fillText(m.mapImage.attribution, W - 24 * k, 87 * k);
+  } else {
+    ctx.font = `${8.5 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.dim;
+    const geo = m.basemap ? "Coastlines/borders: Natural Earth 1:50m · " : "";
+    ctx.fillText(`${geo}Web Mercator · places approx.`, W - 24 * k, 86 * k);
+  }
   ctx.restore();
 }
 

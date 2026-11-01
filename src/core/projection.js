@@ -81,3 +81,35 @@ export function createProjection(bounds, rect) {
     },
   };
 }
+
+// ---- Bridge to MapLibre GL (and any other 512 px-tile Web Mercator web map) ----
+// A web map with bearing 0 and pitch 0 places a point at
+//   x = W/2 + (mercX(lon) − mercX(centerLon)) · TILE_SIZE · 2^zoom,  (same for y)
+// which is exactly createProjection() with scale = TILE_SIZE · 2^zoom. So a camera and a
+// projection are interchangeable descriptions of the same frame.
+
+export const TILE_SIZE = 512;
+
+/** The map camera ({lon, lat, zoom}) that renders `proj` on a width × height viewport (CSS px). */
+export function cameraOf(proj, width, height) {
+  const [lon, lat] = proj.unproject(width / 2, height / 2);
+  return { lon, lat, zoom: Math.log2(proj.scale / TILE_SIZE) };
+}
+
+/** Geographic extent of a width × height viewport showing `camera`. */
+export function frameFromCamera(camera, width, height) {
+  const scale = TILE_SIZE * Math.pow(2, camera.zoom);
+  const cx = mercX(camera.lon), cy = mercY(camera.lat);
+  const halfW = width / 2 / scale, halfH = height / 2 / scale;
+  return {
+    west: (cx - halfW) * 360 - 180,
+    east: (cx + halfW) * 360 - 180,
+    north: invMercY(cy - halfH),
+    south: invMercY(cy + halfH),
+  };
+}
+
+/** Projection that maps the frame (the full output viewport's extent) onto the whole canvas. */
+export function frameProjection(frame, width, height) {
+  return createProjection(frame, { x: 0, y: 0, w: width, h: height });
+}

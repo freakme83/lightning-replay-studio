@@ -1,7 +1,9 @@
 // Writes a self-contained HyperFrames project for one replay.
 // The composition embeds the *raw* dataset text and settings and runs the very same
 // parseDataset → buildReplay → drawFrame pipeline as the preview, from byte-identical
-// copies of src/core, so preview and export cannot drift apart.
+// copies of src/core, so preview and export cannot drift apart. A prepared basemap (see
+// src/map/render-basemap.js) travels as a single PNG that is drawn full-frame, exactly as
+// in the preview; nothing is fetched from the network while rendering.
 import { mkdirSync, copyFileSync, readFileSync, writeFileSync, readdirSync, rmSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,14 +26,35 @@ export function loadGeography() {
 }
 
 /**
+ * A prepared basemap fits a model only if it was rendered for the same frame and size.
+ * Returns a problem description, or null when it matches.
+ */
+export function basemapMismatch(meta, model) {
+  const s = model.settings;
+  if (!meta) return "No basemap metadata.";
+  if (!s.frame) return "The replay has no locked map frame.";
+  if (meta.width !== s.width || meta.height !== s.height) return `Basemap is ${meta.width}×${meta.height}, video is ${s.width}×${s.height}.`;
+  // Both cameras come from the same frame through cameraOf(); allow only float noise.
+  const a = meta.camera, b = model.camera;
+  if (Math.abs(a.zoom - b.zoom) > 1e-9 || Math.abs(a.lon - b.lon) > 1e-9 || Math.abs(a.lat - b.lat) > 1e-9)
+    return "The map frame changed after the basemap was prepared. Lock the frame again.";
+  return null;
+}
+
+/**
+ * @param mapImage optional { png: Buffer, meta } from renderBasemap(); omitted = Natural Earth outlines.
  * @returns {{ model, dataset, outDir }} the model is what the composition will rebuild in Chrome.
  */
-export function buildComposition({ text, filename, settings, outDir }) {
+export function buildComposition({ text, filename, settings, outDir, mapImage = null }) {
   const dataset = parseDataset(text, filename);
   if (!dataset.ok) throw new Error(`Dataset rejected: ${dataset.errors.slice(0, 5).join(" ")}`);
   const geo = loadGeography();
   const model = buildReplay(dataset, settings, geo);
   const s = model.settings;
+  if (mapImage) {
+    const problem = basemapMismatch(mapImage.meta, model);
+    if (problem) throw new Error(problem);
+  }
 
   if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true });
   mkdirSync(join(outDir, "lib", "core"), { recursive: true });
@@ -41,13 +64,15 @@ export function buildComposition({ text, filename, settings, outDir }) {
   copyFileSync(join(ROOT, "node_modules", "gsap", "dist", "gsap.min.js"), join(outDir, "lib", "gsap.min.js"));
   for (const f of readdirSync(FONT_DIR)) if (f.endsWith(".woff2")) copyFileSync(join(FONT_DIR, f), join(outDir, "assets", "fonts", f));
   const fontCss = readFileSync(join(FONT_DIR, "fonts.css"), "utf8").replace(/url\("/g, 'url("assets/fonts/');
+  if (mapImage) writeFileSync(join(outDir, "assets", "basemap.png"), mapImage.png);
 
   // Only the basemap features near the view travel with the composition.
   const input = {
     text,
     filename,
     settings: s,
-    geo: { basemap: filterBasemap(geo.basemap, model.extent, 1), places: geo.places },
+    geo: mapImage ? {} : { basemap: filterBasemap(geo.basemap, model.extent, 1), places: geo.places },
+    map: mapImage ? { src: "assets/basemap.png", attribution: mapImage.meta.attribution } : null,
   };
   writeFileSync(join(outDir, "replay-input.js"), `window.__REPLAY_INPUT = ${JSON.stringify(input)};\n`);
 
@@ -89,8 +114,16 @@ ${fontCss}
       await Promise.all(
         ['400 12px "LR Inter"', '600 12px "LR Inter"', '400 12px "LR Mono"', '500 12px "LR Mono"'].map((f) => document.fonts.load(f, sample)),
       );
+      let mapImage = null;
+      if (input.map) {
+        // Local asset baked before the render; decoded before the timeline is registered.
+        const image = new Image();
+        image.src = input.map.src;
+        await image.decode();
+        mapImage = { image, attribution: input.map.attribution };
+      }
       const dataset = parseDataset(input.text, input.filename);
-      const model = buildReplay(dataset, input.settings, input.geo);
+      const model = buildReplay(dataset, input.settings, { ...input.geo, mapImage });
       const ctx = document.getElementById("replay-canvas").getContext("2d");
       const draw = (t) => drawFrame(ctx, model, Math.max(0, Math.min(model.settings.duration, t)));
 

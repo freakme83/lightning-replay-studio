@@ -1,6 +1,6 @@
 // Builds the replay model: the one object both the preview and the exported video draw from.
 import { createTimeMap } from "./timeline.js";
-import { autoBounds, createProjection, validateBounds } from "./projection.js";
+import { autoBounds, cameraOf, createProjection, frameProjection, validateBounds } from "./projection.js";
 import { parseTimestamp } from "./parse.js";
 
 export const DEFAULTS = Object.freeze({
@@ -11,7 +11,8 @@ export const DEFAULTS = Object.freeze({
   trailMinutes: 20, // residual marker lifetime, in dataset minutes
   markerScale: 1, // visual size multiplier for strike markers
   showHistory: true, // keep a faint dot for every earlier strike
-  bounds: null, // {west, south, east, north} or null = fit to data
+  bounds: null, // {west, south, east, north} or null = fit to data (strikes fitted inside the HUD-free map area)
+  frame: null, // {west, south, east, north} of the whole video frame (Map Composer); takes precedence over bounds
   timeRange: null, // {start, end} ISO strings / epoch ms, or null = first..last strike
   title: null,
 });
@@ -36,11 +37,12 @@ export function normalizeSettings(settings = {}) {
   s.trailMinutes = num(s.trailMinutes, "Trail duration (min)", 0, 1440);
   s.markerScale = num(s.markerScale, "Marker size", 0.25, 4);
   s.showHistory = s.showHistory !== false && s.showHistory !== "false";
-  if (s.bounds) {
-    const b = { west: +s.bounds.west, south: +s.bounds.south, east: +s.bounds.east, north: +s.bounds.north };
+  for (const key of ["bounds", "frame"]) {
+    if (!s[key]) continue;
+    const b = { west: +s[key].west, south: +s[key].south, east: +s[key].east, north: +s[key].north };
     const err = validateBounds(b);
-    if (err) throw new Error(err);
-    s.bounds = b;
+    if (err) throw new Error(key === "frame" ? `Map frame: ${err}` : err);
+    s[key] = b;
   }
   return s;
 }
@@ -111,6 +113,16 @@ export function filterBasemap(basemap, extent, pad = 0.5) {
   };
 }
 
+/**
+ * The video frame that "Fit to Data" selects: the strikes (padded) fitted inside the
+ * HUD-free map area, extended to the full width × height canvas.
+ */
+export function fitFrame(events, width = DEFAULTS.width, height = DEFAULTS.height) {
+  const bounds = autoBounds(events);
+  if (!bounds) return null;
+  return createProjection(bounds, mapRect(width, height)).extentOf({ x: 0, y: 0, w: width, h: height });
+}
+
 /** Project the visible basemap once per model. */
 function prepareBasemap(basemap, proj, extent) {
   const b = filterBasemap(basemap, extent);
@@ -122,7 +134,9 @@ function prepareBasemap(basemap, proj, extent) {
 /**
  * @param dataset result of parseDataset()
  * @param settings partial settings (see DEFAULTS)
- * @param assets {basemap?, places?} optional geography for drawing
+ * @param assets {basemap?, places?, mapImage?} optional geography for drawing.
+ *   mapImage = { image, attribution }: a prepared basemap (CanvasImageSource) that covers the
+ *   whole frame exactly. When present it replaces the Natural Earth outlines and place list.
  */
 export function buildReplay(dataset, settings = {}, assets = {}) {
   if (!dataset?.ok || !dataset.events.length) throw new Error("No valid events to replay.");
@@ -133,9 +147,11 @@ export function buildReplay(dataset, settings = {}, assets = {}) {
   if (!inRange.length) throw new Error("No events fall inside the selected time range.");
 
   const timeMap = createTimeMap({ startMs: range.start, endMs: range.end, duration: s.duration });
-  const bounds = s.bounds ?? autoBounds(inRange);
-  const rect = mapRect(s.width, s.height);
-  const proj = createProjection(bounds, rect);
+  // A locked map frame covers the whole canvas; otherwise strikes (or manual bounds) are
+  // fitted into the HUD-free area as in v1.
+  const bounds = s.frame ?? s.bounds ?? autoBounds(inRange);
+  const proj = s.frame ? frameProjection(s.frame, s.width, s.height) : createProjection(bounds, mapRect(s.width, s.height));
+  const mapImage = assets.mapImage ?? null;
   const weights = visualWeights(inRange, dataset.meta);
 
   const events = inRange.map((e, i) => {
@@ -156,7 +172,7 @@ export function buildReplay(dataset, settings = {}, assets = {}) {
   const extent = proj.extentOf({ x: 0, y: 0, w: s.width, h: s.height });
   const visible = (p) => p.lat >= extent.south && p.lat <= extent.north && p.lon >= extent.west && p.lon <= extent.east;
   const latSpan = extent.north - extent.south;
-  const places = (assets.places ?? [])
+  const places = (mapImage ? [] : assets.places ?? [])
     .filter(visible)
     .filter((p) => (p.rank ?? 1) <= (latSpan < 1.5 ? 3 : latSpan < 6 ? 2 : 1))
     .map((p) => ({ ...p, xy: proj.project(p.lon, p.lat) }));
@@ -171,13 +187,16 @@ export function buildReplay(dataset, settings = {}, assets = {}) {
     timeMap,
     proj,
     bounds,
-    autoFitted: !s.bounds,
+    autoFitted: !s.bounds && !s.frame,
     extent,
+    /** MapLibre camera that renders exactly this frame at settings.width × settings.height. */
+    camera: cameraOf(proj, s.width, s.height),
+    mapImage,
     events,
     bins,
     binMs: dataSpan / binCount,
     trailVideo,
-    basemap: prepareBasemap(assets.basemap, proj, extent),
+    basemap: mapImage ? null : prepareBasemap(assets.basemap, proj, extent),
     places,
     /** Number of strikes visible at video time t (event visible once t >= its video time). */
     countAt: (t) => upperBound(events, "v", t),

@@ -4,7 +4,9 @@ A local tool that turns a timestamped lightning-strike dataset (CSV or JSON) int
 geographically accurate, time-compressed storm replay. You can preview it interactively
 and export it as an H.264 MP4 through the local [HyperFrames](https://github.com/heygen-com/hyperframes) renderer.
 
-Everything runs on your Mac. There are no API keys, no map tiles, no cloud rendering and no network calls at runtime.
+Everything runs on your Mac. There are no API keys, no accounts and no cloud rendering. The only network access is
+fetching free [OpenFreeMap](https://openfreemap.org) vector tiles once when you lock a map frame; the HyperFrames
+render itself never touches the network. Without internet the studio falls back to bundled Natural Earth outlines.
 
 ![contact sheet](contact-sheet.png)
 
@@ -87,12 +89,34 @@ All of these are in the sidebar:
 | Marker size | Visual scale of the strike markers |
 | Keep faint dot for earlier strikes | Leaves a dim dot for every past strike, so the storm's footprint builds up |
 | Event time range | Optional start and end (ISO with offset). Strikes outside the range are excluded and counted. |
-| Map: N/W/E/S + Apply bounds | Custom geographic bounds |
-| Fit map to data | Returns to automatic bounds: every strike plus 12 % padding |
+| Map frame: Fit to Data | Frames every strike in the time range (plus 12 % padding) inside the HUD-free area |
+| Map frame: Lock Frame / Unlock | Confirms the 16:9 frame (prepares the map), or returns to editing it |
+| Exact frame edges (advanced) | Type N/W/E/S; widened on one axis to keep the video's 16:9 shape |
 
 **Time mapping.** A strike at time *T* appears at
 `leadIn + (T − start) / (end − start) × (duration − leadIn − tail)`. `leadIn` is 1.2 s and `tail` is 1.8 s; both
 shrink for videos under 20 s. This keeps the relative spacing of strikes exact. Strikes that share a timestamp appear on the same frame.
+
+## Choose the map frame (Map Composer)
+
+A loaded dataset opens on a real, dark interactive map (MapLibre GL JS + OpenFreeMap) with its strikes as dots.
+
+1. **Navigate.** Drag to pan, scroll or use **+ / −** to zoom. The bright rectangle is the exact 960 × 540 video frame;
+   the area outside it is dimmed, and the hatched bands inside it sit under the replay's title and timeline HUD.
+2. **Fit to Data** frames all strikes in the selected time range.
+3. **Lock Frame.** The studio prepares a basemap image for exactly that frame (about 2–4 s, cached in
+   `work/basemaps/`). The stage then switches to the replay preview, drawn on that image: paused or playing, it is the
+   exported video frame for frame. The sidebar reports the alignment check (MapLibre vs. replay projection).
+4. **Unlock / Edit Frame** returns to the map at the same framing.
+
+If the map cannot be loaded (offline, provider down), the composer shows the Natural Earth outlines, the sidebar says
+why, and **export is blocked** until you tick *Use offline outline map* — a failed map never becomes a blank background.
+
+**Why positions match.** MapLibre and the replay both use Web Mercator: a map camera (centre, zoom) on a W × H viewport
+*is* the replay's projection with scale 512 · 2^zoom (`cameraOf` / `frameFromCamera` in `src/core/projection.js`).
+The locked frame is stored as its geographic edges, the basemap is rendered by headless MapLibre at exactly 960 × 540
+(×2 pixel ratio) from the camera derived from that frame, and every strike and the basemap go through the same
+projection. Map credit (OpenFreeMap © OpenMapTiles · Data © OpenStreetMap contributors) is drawn in every frame.
 
 ## Preview an event
 
@@ -123,6 +147,9 @@ npm run render -- my-storm.csv -o exports/my-storm-45s.mp4 --duration 45 --trail
 npm run render -- my-storm.csv -o exports/zoomed.mp4 --bounds 32.6,39.75,33.1,40.05 --start 2026-11-01T15:00:00+03:00
 ```
 
+The CLI prepares the same dark map (Fit to Data unless `--frame west,south,east,north` or `--bounds` is given). If the map
+cannot be prepared it stops; add `--outline` to export with the offline Natural Earth outlines instead.
+
 Other CLI options: `--fps`, `--width`/`--height` (16:9 recommended), `--title`, `--keep` (keeps the
 generated HyperFrames project in `work/`).
 
@@ -138,23 +165,30 @@ node scripts/contact-sheet.js demo.mp4 contact-sheet.png
 npm test
 ```
 
-There are seven focused tests:
+Focused tests (`npm run test:map` runs only the map ones):
 
 1. Timeline positions are correct.
 2. Events are sorted chronologically and invalid input is rejected.
 3. Geographic projection is consistent.
 4. Strikes with the same timestamp appear on the same frame.
 5. The preview and the export use identical time mapping.
-6. A real 4 s HyperFrames render, plus `demo.mp4`, match the requested duration, fps and size.
+6. A real 4 s HyperFrames render, plus `demo.mp4`, match the requested duration, fps and size. 6c renders an MP4 over a
+   MapLibre basemap with rings at known coordinates and checks rings and strike markers land on the same pixels.
+7. The MapLibre camera and the replay projection are the same transform.
+8. Fit to Data, pan, zoom and lock define the frame; time compression and ordering are unchanged.
+9. A prepared basemap travels into the composition unchanged; a basemap for another frame is refused.
+10. Headless MapLibre draws known coordinates exactly where the replay does (offline style, no network).
+11. Map download failures are reported, never baked as a blank map.
 
 ## Project layout
 
 ```
-app/                 interactive preview (HTML/CSS/JS, no build step)
+app/                 interactive preview (HTML/CSS/JS, no build step) · composer.js (Map Composer)
 src/core/            parse.js · timeline.js · projection.js · replay.js · draw.js
                      shared by the preview AND the exported video (copied byte-identical)
+src/map/             providers.js (map provider + dark style tuning + offline style) · render-basemap.js (headless bake)
 src/export/          composition.js (writes the HyperFrames project) · render.js (render + ffprobe)
-server.js            local server: static files + /api/export
+server.js            local server: static files + /api/basemap + /api/export
 scripts/             render.js (CLI) · generate-sample.js · contact-sheet.js · build-basemap.js
 basemap/             ne-50m.json (Natural Earth 1:50m coastlines/borders) · places.json (approx. reference places)
 data/                synthetic sample datasets (JSON + CSV)
