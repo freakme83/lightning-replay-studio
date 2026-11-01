@@ -17,7 +17,7 @@ const SAMPLE = readFileSync(join(ROOT, "data", "sample-ankara-storm.json"), "utf
 const sample = parseDataset(SAMPLE, "sample-ankara-storm.json"); // synthetic, CG + IC
 const frame = fitFrame(sample.events, W, H);
 const MAP = { image: {}, attribution: "OpenFreeMap © OpenMapTiles · Data © OpenStreetMap contributors" };
-const model = (overlays, extra = {}, ds = sample) => buildReplay(ds, { frame, overlays, ...extra }, { mapImage: MAP });
+const model = (overlays, extra = {}, ds = sample) => buildReplay(ds, { quality: "draft", frame, overlays, ...extra }, { mapImage: MAP });
 
 /** Everything drawFrame asks of the 2D context, in order. */
 function record(m, t) {
@@ -111,7 +111,7 @@ test("20. the renderer draws exactly the overlays that are on", () => {
   assert.deepEqual(on.text.filter((s) => !/OpenFreeMap/.test(s)), off.text);
   assert.deepEqual(on.text.filter((s) => /OpenFreeMap/.test(s)), [MAP.attribution]);
   // The outline fallback's own credit line is the attribution overlay too.
-  const outline = (ov) => record(buildReplay(sample, { frame, overlays: ov }, { basemap: { land: [], borders: [] }, places: [] }), T);
+  const outline = (ov) => record(buildReplay(sample, { quality: "draft", frame, overlays: ov }, { basemap: { land: [], borders: [] }, places: [] }), T);
   assert.ok(has(outline(defaultOverlays()), /Web Mercator/));
   assert.ok(!has(outline({ ...defaultOverlays(), attribution: false }), /Web Mercator/));
   // Restoring the defaults gives the identical frame as never having changed anything.
@@ -149,14 +149,14 @@ test("22. preview and export receive identical overlay settings; the map image i
   const dir = mkdtempSync(join(tmpdir(), "lr-ovl-"));
   try {
     const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4300000000049454e44ae426082", "hex");
-    const m0 = buildReplay(sample, { frame });
-    const meta = { width: W, height: H, camera: m0.camera, attribution: MAP.attribution, layersKey: "k" };
+    const m0 = buildReplay(sample, { quality: "draft", frame });
+    const meta = { width: W, height: H, pixelRatio: 1, camera: m0.camera, attribution: MAP.attribution, layersKey: "k" };
     for (const overlays of [defaultOverlays(), noOverlays(), { ...defaultOverlays(), clock: false, attribution: false }]) {
       const out = join(dir, "c" + JSON.stringify(overlays).length);
-      const { model: built } = buildComposition({ text: SAMPLE, filename: "s.json", settings: { frame, overlays }, outDir: out, mapImage: { png, meta } });
+      const { model: built } = buildComposition({ text: SAMPLE, filename: "s.json", settings: { quality: "draft", frame, overlays }, outDir: out, mapImage: { png, meta } });
       const input = JSON.parse(readFileSync(join(out, "replay-input.js"), "utf8").replace(/^window\.__REPLAY_INPUT = /, "").replace(/;\s*$/, ""));
       assert.deepEqual(input.settings.overlays, normalizeOverlays(overlays), "the composition embeds the overlay settings the preview uses");
-      assert.deepEqual(built.settings.overlays, buildReplay(sample, { frame, overlays }).settings.overlays);
+      assert.deepEqual(built.settings.overlays, buildReplay(sample, { quality: "draft", frame, overlays }).settings.overlays);
       assert.deepEqual(readFileSync(join(out, "assets", "basemap.png")), png, "same prepared map image whatever the overlays");
       assert.equal(basemapMismatch(meta, built), null, "the prepared map still fits: overlays are not part of its identity");
     }

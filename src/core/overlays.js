@@ -3,9 +3,10 @@
 // the renderer (src/core/draw.js), so the preview and the exported MP4 cannot disagree.
 // Strikes, flashes, rings, trails and the map itself are the core animation, never overlays.
 //
-// `zone` says which HUD backing band (the dark gradient that keeps text readable over the
-// map) an overlay needs; a band is only drawn while at least one overlay in it is visible, so
-// with everything off the frame holds nothing but the map and the lightning.
+// `zone` is the default HUD backing band (the dark gradient that keeps text readable over the
+// map) an overlay needs; a layout (src/core/layout.js) may move an overlay to the other band. A
+// band is only drawn while at least one overlay in it is visible, so with everything off the
+// frame holds nothing but the map and the lightning.
 
 export const OVERLAYS = [
   { id: "title", label: "Title", hint: "Replay title and storm summary, upper left", zone: "top", default: true },
@@ -38,8 +39,11 @@ export function normalizeOverlays(input) {
   return out;
 }
 
-/** Does any visible overlay need the top / bottom HUD backing band? */
-export const zoneVisible = (overlays, zone) => OVERLAYS.some((o) => o.zone === zone && overlays[o.id]);
+/**
+ * Does any visible overlay need the top / bottom HUD backing band? `layout` (src/core/layout.js)
+ * may move an overlay to the other band; without it the default zones above apply.
+ */
+export const zoneVisible = (overlays, zone, layout = null) => OVERLAYS.some((o) => (layout?.zone?.[o.id] ?? o.zone) === zone && overlays[o.id]);
 
 /**
  * CLI spec: "all", "none", or a comma list of the overlays to keep ("title,clock").

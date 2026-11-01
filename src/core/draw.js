@@ -101,7 +101,7 @@ function drawGrid(ctx, m, k) {
   ctx.lineWidth = 1;
   ctx.fillStyle = PALETTE.gridLabel;
   ctx.font = `${9.5 * k}px ${FONT_MONO}`;
-  const labelY = m.proj.rect.y + m.proj.rect.h - 4 * k;
+  const labelY = H - m.layout.grid.labelBottom * k;
   ctx.textAlign = "center";
   for (let lon = Math.ceil(extent.west / step) * step; lon <= extent.east; lon += step) {
     const [x] = proj.project(lon, extent.south);
@@ -116,7 +116,7 @@ function drawGrid(ctx, m, k) {
     ctx.globalAlpha = lineAlpha;
     ctx.beginPath(); ctx.moveTo(0, Math.round(y) + 0.5); ctx.lineTo(W, Math.round(y) + 0.5); ctx.stroke();
     ctx.globalAlpha = labelAlpha;
-    if (y > m.proj.rect.y && y < m.proj.rect.y + m.proj.rect.h) ctx.fillText(fmtDeg(lat, "N", "S", step), 6 * k, y - 3 * k);
+    if (y > m.layout.safe.top * k && y < labelY - 8 * k) ctx.fillText(fmtDeg(lat, "N", "S", step), 6 * k, y - 3 * k);
   }
   ctx.restore();
 }
@@ -218,48 +218,85 @@ function drawStrikes(ctx, m, t, k) {
 
 const SCALE_STEPS_M = [100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000];
 
+/** `str` shortened with an ellipsis so it fits `maxW` px at the context's current font. */
+function fitText(ctx, str, maxW) {
+  if (!(maxW > 0) || ctx.measureText(str).width <= maxW) return str;
+  let s = str;
+  while (s.length > 1 && ctx.measureText(`${s}…`).width > maxW) s = s.slice(0, -1);
+  return `${s}…`;
+}
+
+/**
+ * Draw `str` inside `maxW` px: shrunk down to `minScale` of the current font first, then
+ * shortened with an ellipsis. Honours the context's textAlign.
+ */
+function drawFitted(ctx, str, x, y, maxW, minScale = 1) {
+  const w = ctx.measureText(str).width;
+  const sc = w <= maxW ? 1 : Math.max(minScale, maxW / w);
+  const out = fitText(ctx, str, maxW / sc);
+  if (sc === 1) return ctx.fillText(out, x, y);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(sc, sc);
+  ctx.fillText(out, 0, 0);
+  ctx.restore();
+}
+
 function drawScaleBar(ctx, m, k) {
-  const { proj, settings } = m;
+  const { proj } = m;
+  const S = m.layout.scaleBar;
   const lat = (m.extent.north + m.extent.south) / 2;
   const mpp = proj.metersPerPixel(lat);
-  const target = 110 * k * mpp;
+  const target = S.target * k * mpp;
   let dist = SCALE_STEPS_M[0];
   for (const d of SCALE_STEPS_M) if (d <= target) dist = d;
   const px = dist / mpp;
-  const x = 24 * k, y = settings.height - 84 * k;
+  const label = dist >= 1000 ? `${dist / 1000} km` : `${dist} m`;
+  const y = S.y * k;
   ctx.save();
+  ctx.font = `${S.size * k}px ${FONT_MONO}`;
+  const total = px + 6 * k + ctx.measureText(label).width;
+  const x = S.align === "right" ? S.x * k - total : S.x * k;
   ctx.strokeStyle = PALETTE.muted;
   ctx.lineWidth = 1 * k;
   ctx.beginPath();
   ctx.moveTo(x, y - 4 * k); ctx.lineTo(x, y); ctx.lineTo(x + px, y); ctx.lineTo(x + px, y - 4 * k);
   ctx.stroke();
   ctx.fillStyle = PALETTE.muted;
-  ctx.font = `${9 * k}px ${FONT_MONO}`;
   ctx.textAlign = "left";
-  ctx.fillText(dist >= 1000 ? `${dist / 1000} km` : `${dist} m`, x + px + 6 * k, y + 1 * k);
+  ctx.fillText(label, x + px + 6 * k, y + 1 * k);
   ctx.restore();
 }
 
 function drawLegend(ctx, m, k) {
-  const W = m.settings.width;
-  const y = m.settings.height - 86 * k;
+  const S = m.layout.legend;
+  const y = S.y * k;
+  const types = new Set(m.events.map((e) => e.type));
+  const items = [];
+  if (types.has("CG")) items.push(["cloud-to-ground", (cx, cy) => { ctx.fillStyle = `rgb(${PALETTE.cgRgb})`; ctx.beginPath(); ctx.arc(cx, cy, 3 * k, 0, 7); ctx.fill(); }]);
+  if (types.has("IC")) items.push(["intracloud", (cx, cy) => { ctx.strokeStyle = PALETTE.signal; ctx.lineWidth = 1.2 * k; ctx.beginPath(); ctx.arc(cx, cy, 3 * k, 0, 7); ctx.stroke(); }]);
+  if (types.has("unknown")) items.push(["unclassified", (cx, cy) => { ctx.fillStyle = PALETTE.signal; ctx.beginPath(); ctx.arc(cx, cy, 3 * k, 0, 7); ctx.fill(); }]);
   ctx.save();
-  ctx.font = `${9.5 * k}px ${FONT_MONO}`;
+  ctx.font = `${S.size * k}px ${FONT_MONO}`;
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
-  let x = W - 360 * k;
-  const item = (draw, label) => {
-    draw(x + 4 * k, y);
+  const trail = `trail ${m.settings.trailMinutes} min`;
+  let total = ctx.measureText(trail).width;
+  for (const [label] of items) total += 12 * k + ctx.measureText(label).width + 14 * k;
+  // A legend wider than its slot shrinks to fit, so it can never run into its neighbours.
+  const f = Math.min(1, (S.maxW * k) / total);
+  const x0 = S.align === "right" ? S.x * k - total * f : S.x * k;
+  ctx.translate(x0, y);
+  ctx.scale(f, f);
+  let x = 0;
+  for (const [label, mark] of items) {
+    mark(x + 4 * k, 0);
     ctx.fillStyle = PALETTE.muted;
-    ctx.fillText(label, x + 12 * k, y);
+    ctx.fillText(label, x + 12 * k, 0);
     x += ctx.measureText(label).width + 26 * k;
-  };
-  const types = new Set(m.events.map((e) => e.type));
-  if (types.has("CG")) item((cx, cy) => { ctx.fillStyle = `rgb(${PALETTE.cgRgb})`; ctx.beginPath(); ctx.arc(cx, cy, 3 * k, 0, 7); ctx.fill(); }, "cloud-to-ground");
-  if (types.has("IC")) item((cx, cy) => { ctx.strokeStyle = PALETTE.signal; ctx.lineWidth = 1.2 * k; ctx.beginPath(); ctx.arc(cx, cy, 3 * k, 0, 7); ctx.stroke(); }, "intracloud");
-  if (types.has("unknown")) item((cx, cy) => { ctx.fillStyle = PALETTE.signal; ctx.beginPath(); ctx.arc(cx, cy, 3 * k, 0, 7); ctx.fill(); }, "unclassified");
+  }
   ctx.fillStyle = PALETTE.dim;
-  ctx.fillText(`trail ${m.settings.trailMinutes} min`, x, y);
+  ctx.fillText(trail, x, 0);
   ctx.restore();
 }
 
@@ -271,8 +308,8 @@ function niceMinutes(raw) {
 function drawStrip(ctx, m, t, k) {
   const { settings, bins, range, timeMap, displayOffsetMin: off } = m;
   const ov = settings.overlays;
-  const W = settings.width, H = settings.height;
-  const x0 = 196 * k, x1 = W - 24 * k, top = H - 70 * k, base = H - 30 * k;
+  const A = m.layout.activity;
+  const x0 = A.x0 * k, x1 = A.x1 * k, top = A.top * k, base = A.base * k;
   const w = x1 - x0, h = base - top;
   const max = Math.max(1, ...bins);
   const dataSpan = range.end - range.start;
@@ -299,7 +336,7 @@ function drawStrip(ctx, m, t, k) {
       }
     });
     // ticks
-    ctx.font = `${9.5 * k}px ${FONT_MONO}`;
+    ctx.font = `${A.size * k}px ${FONT_MONO}`;
     ctx.fillStyle = PALETTE.gridLabel;
     ctx.textAlign = "center";
     if (dataSpan > 0) {
@@ -323,97 +360,125 @@ function drawStrip(ctx, m, t, k) {
     ctx.fill();
     ctx.fillStyle = PALETTE.dim;
     ctx.textAlign = "left";
-    ctx.fillText(`strikes / ${Math.max(1, Math.round(m.binMs / 6000) / 10)} min`, x0, top - 6 * k);
-
+    ctx.fillText(`strikes / ${Math.max(1, Math.round(m.binMs / 6000) / 10)} min`, (A.captionX ?? A.x0) * k, top - (A.captionDy ?? 6) * k);
   }
   // counters
   if (ov.counter) {
+    const C = m.layout.counter;
+    const cx = C.x * k;
     const count = m.countAt(t);
+    ctx.textAlign = "left";
     ctx.fillStyle = PALETTE.muted;
-    ctx.font = `${9 * k}px ${FONT_MONO}`;
-    ctx.fillText("STRIKES", 24 * k, top - 4 * k);
-    ctx.font = `500 ${22 * k}px ${FONT_MONO}`;
+    ctx.font = `${C.label.size * k}px ${FONT_MONO}`;
+    ctx.fillText("STRIKES", cx, C.label.y * k);
+    ctx.font = `500 ${C.value.size * k}px ${FONT_MONO}`;
     ctx.fillStyle = PALETTE.ink;
     const digits = String(m.totalEvents).length;
     const cs = String(count).padStart(digits, "0");
-    ctx.fillText(cs, 24 * k, top + 20 * k);
+    ctx.fillText(cs, cx, C.value.y * k);
     const cw = ctx.measureText(cs).width;
-    ctx.font = `${11 * k}px ${FONT_MONO}`;
+    ctx.font = `${C.value.total * k}px ${FONT_MONO}`;
     ctx.fillStyle = PALETTE.muted;
-    ctx.fillText(` / ${m.totalEvents}`, 24 * k + cw, top + 20 * k);
-    ctx.font = `${9 * k}px ${FONT_MONO}`;
-    ctx.fillText("LAST 10 MIN", 24 * k, top + 40 * k);
+    ctx.fillText(` / ${m.totalEvents}`, cx + cw, C.value.y * k);
+    ctx.font = `${C.recent.size * k}px ${FONT_MONO}`;
+    ctx.fillText("LAST 10 MIN", cx, C.recent.y * k);
     ctx.fillStyle = PALETTE.signal;
-    ctx.fillText(String(m.recentCount(t, 600000)), 24 * k + 80 * k, top + 40 * k);
+    ctx.fillText(String(m.recentCount(t, 600000)), cx + C.recent.dx * k, C.recent.y * k);
   }
   ctx.restore();
 }
 
 function drawHeader(ctx, m, t, k) {
   const { settings, meta, timeMap, displayOffsetMin: off } = m;
+  const { title: T, notice: N, clock: K } = m.layout;
   const W = settings.width;
   const now = formatLocal(timeMap.toData(t), off);
   const ov = settings.overlays;
+  const gap = 16 * k;
+  // Space the title block's rows may use: up to the clock text that shares that row (if the clock is on).
+  const room = { label: W - T.x * k - 24 * k, name: W - T.x * k - 24 * k, summary: W - T.x * k - 24 * k };
   ctx.save();
   ctx.textBaseline = "alphabetic";
-  // left: title block
+  if (ov.clock) {
+    ctx.textAlign = "right";
+    const row = (r, font, str, color) => {
+      ctx.font = font;
+      ctx.fillStyle = color;
+      ctx.fillText(str, K.xr * k, r.y * k);
+      return K.xr * k - ctx.measureText(str).width - gap - T.x * k;
+    };
+    const zoneRoom = row(K.label, `${K.label.size * k}px ${FONT_MONO}`, `LOCAL TIME · ${now.zone}`, PALETTE.muted);
+    const timeRoom = row(K.time, `500 ${K.time.size * k}px ${FONT_MONO}`, now.time, PALETTE.ink);
+    const dateRoom = row(K.date, `${K.date.size * k}px ${FONT_MONO}`, now.date, PALETTE.muted);
+    // Only rows at the same height can collide: label↔label, title↔time, summary↔date.
+    room.label = zoneRoom; room.name = timeRoom; room.summary = dateRoom;
+  }
   ctx.textAlign = "left";
   if (ov.title) {
-    ctx.font = `500 ${9.5 * k}px ${FONT_MONO}`;
+    ctx.font = `500 ${T.label.size * k}px ${FONT_MONO}`;
     ctx.fillStyle = PALETTE.signal;
-    ctx.fillText("LIGHTNING REPLAY", 24 * k, 30 * k);
-    ctx.font = `600 ${17 * k}px ${FONT_SANS}`;
+    ctx.fillText("LIGHTNING REPLAY", T.x * k, T.label.y * k);
+    ctx.font = `600 ${T.name.size * k}px ${FONT_SANS}`;
     ctx.fillStyle = PALETTE.ink;
-    ctx.fillText(settings.title || meta.name || "Lightning dataset", 24 * k, 52 * k);
+    drawFitted(ctx, settings.title || meta.name || "Lightning dataset", T.x * k, T.name.y * k, room.name, 0.72);
     const span = m.range.end - m.range.start;
     const mins = Math.round(span / 60000);
-    ctx.font = `${9 * k}px ${FONT_MONO}`;
+    ctx.font = `${T.summary.size * k}px ${FONT_MONO}`;
     ctx.fillStyle = PALETTE.muted;
     const dur = mins >= 120 ? `${(mins / 60).toFixed(mins % 60 ? 1 : 0)} h` : `${mins} min`;
-    ctx.fillText(`${m.totalEvents} strikes · ${dur} storm → ${settings.duration} s replay (×${Math.round(span / 1000 / timeMap.span)})`, 24 * k, 68 * k);
+    drawFitted(ctx, `${m.totalEvents} strikes · ${dur} storm → ${settings.duration} s replay (×${Math.round(span / 1000 / timeMap.span)})`, T.x * k, T.summary.y * k, room.summary, 0.85);
   }
   if (ov.syntheticNotice && meta.synthetic) {
-    ctx.font = `500 ${8.5 * k}px ${FONT_MONO}`;
+    ctx.font = `500 ${N.size * k}px ${FONT_MONO}`;
     const label = "SYNTHETIC DATA · FICTIONAL STORM · NOT REAL DETECTIONS";
     const tw = ctx.measureText(label).width;
     ctx.strokeStyle = `rgba(${PALETTE.accentRgb}, 0.7)`;
     ctx.lineWidth = 1 * k;
-    ctx.strokeRect(24 * k + 0.5, 76 * k + 0.5, tw + 12 * k, 14 * k);
+    ctx.strokeRect(N.x * k + 0.5, N.y * k + 0.5, tw + 12 * k, N.h * k);
     ctx.fillStyle = PALETTE.accent;
-    ctx.fillText(label, 30 * k, 86.5 * k);
-  }
-  // right: clock
-  if (ov.clock) {
-    ctx.textAlign = "right";
-    ctx.font = `${9 * k}px ${FONT_MONO}`;
-    ctx.fillStyle = PALETTE.muted;
-    ctx.fillText(`LOCAL TIME · ${now.zone}`, W - 24 * k, 26 * k);
-    ctx.font = `500 ${28 * k}px ${FONT_MONO}`;
-    ctx.fillStyle = PALETTE.ink;
-    ctx.fillText(now.time, W - 24 * k, 56 * k);
-    ctx.font = `${9 * k}px ${FONT_MONO}`;
-    ctx.fillStyle = PALETTE.muted;
-    ctx.fillText(now.date, W - 24 * k, 72 * k);
+    ctx.fillText(label, N.x * k + 6 * k, (N.y + N.h * 0.75) * k);
   }
   ctx.restore();
 }
 
 function drawFooterNote(ctx, m, k) {
-  const W = m.settings.width;
+  const A = m.layout.attribution;
   ctx.save();
-  ctx.textAlign = "right";
+  ctx.textAlign = A.align;
   if (m.mapImage) {
     // Map data credit required by the tile provider; kept legible in every exported frame.
-    ctx.font = `${9 * k}px ${FONT_MONO}`;
+    ctx.font = `${A.size * k}px ${FONT_MONO}`;
     ctx.fillStyle = PALETTE.muted;
-    ctx.fillText(m.mapImage.attribution, W - 24 * k, 87 * k);
+    drawFitted(ctx, m.mapImage.attribution, A.x * k, A.y * k, A.maxW * k, 0.85);
   } else {
-    ctx.font = `${8.5 * k}px ${FONT_MONO}`;
+    ctx.font = `${(A.size - 0.5) * k}px ${FONT_MONO}`;
     ctx.fillStyle = PALETTE.dim;
     const geo = m.basemap ? "Coastlines/borders: Natural Earth 1:50m · " : "";
-    ctx.fillText(`${geo}Web Mercator · places approx.`, W - 24 * k, 86 * k);
+    drawFitted(ctx, `${geo}Web Mercator · places approx.`, A.x * k, (A.y - 1) * k, A.maxW * k, 0.85);
   }
   ctx.restore();
+}
+
+const smoothstep = (x) => x * x * (3 - 2 * x);
+
+/**
+ * A HUD backing scrim from [y, alpha] control points (design units, top to bottom), eased between
+ * points so the tint has no visible start or end edge.
+ */
+function drawScrim(ctx, points, W, k) {
+  const y0 = points[0][0] * k, y1 = points[points.length - 1][0] * k;
+  const g = ctx.createLinearGradient(0, y0, 0, y1);
+  const STEPS = 12;
+  for (let i = 0; i < points.length - 1; i++) {
+    const [ya, aa] = points[i], [yb, ab] = points[i + 1];
+    for (let j = i ? 1 : 0; j <= STEPS; j++) {
+      const f = j / STEPS;
+      const a = aa + (ab - aa) * smoothstep(f);
+      g.addColorStop(((ya + (yb - ya) * f) * k - y0) / (y1 - y0), `rgba(6, 8, 11, ${+a.toFixed(4)})`);
+    }
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, y0, W, y1 - y0);
 }
 
 /**
@@ -424,7 +489,8 @@ function drawFooterNote(ctx, m, k) {
  */
 export function drawFrame(ctx, m, t, opts = {}) {
   const { width: W, height: H } = m.settings;
-  const k = W / 960;
+  const L = m.layout;
+  const k = L.k; // output px per design unit: 1 for Draft, 2 for Full HD
   ctx.save();
   ctx.fillStyle = PALETTE.ground;
   ctx.fillRect(0, 0, W, H);
@@ -435,21 +501,36 @@ export function drawFrame(ctx, m, t, opts = {}) {
   // Informational overlays (src/core/overlays.js). The HUD backing bands keep their text
   // readable over the map, so each band exists only while an overlay needs it.
   const ov = m.settings.overlays;
-  if (zoneVisible(ov, "top")) {
-    const g1 = ctx.createLinearGradient(0, 0, 0, 100 * k);
-    g1.addColorStop(0, "rgba(6, 8, 11, 0.92)"); g1.addColorStop(1, "rgba(6, 8, 11, 0)");
-    ctx.fillStyle = g1; ctx.fillRect(0, 0, W, 100 * k);
+  if (zoneVisible(ov, "top", L)) {
+    if (L.scrims?.top) drawScrim(ctx, L.scrims.top, W, k);
+    else {
+      const h = L.bands.top * k;
+      const g1 = ctx.createLinearGradient(0, 0, 0, h);
+      g1.addColorStop(0, "rgba(6, 8, 11, 0.92)"); g1.addColorStop(1, "rgba(6, 8, 11, 0)");
+      ctx.fillStyle = g1; ctx.fillRect(0, 0, W, h);
+    }
   }
-  if (zoneVisible(ov, "bottom")) {
-    const g2 = ctx.createLinearGradient(0, H - 92 * k, 0, H);
-    g2.addColorStop(0, "rgba(6, 8, 11, 0)"); g2.addColorStop(0.35, "rgba(6, 8, 11, 0.9)"); g2.addColorStop(1, "rgba(6, 8, 11, 0.96)");
-    ctx.fillStyle = g2; ctx.fillRect(0, H - 92 * k, W, 92 * k);
+  if (zoneVisible(ov, "bottom", L)) {
+    if (L.scrims?.bottom) drawScrim(ctx, L.scrims.bottom, W, k);
+    else {
+      const h = L.bands.bottom * k;
+      const g2 = ctx.createLinearGradient(0, H - h, 0, H);
+      g2.addColorStop(0, "rgba(6, 8, 11, 0)"); g2.addColorStop(0.35, "rgba(6, 8, 11, 0.9)"); g2.addColorStop(1, "rgba(6, 8, 11, 0.96)");
+      ctx.fillStyle = g2; ctx.fillRect(0, H - h, W, h);
+    }
+  }
+  ctx.save();
+  if (L.halo) {
+    // Soft local shadow under every HUD mark (text, chart, rules) instead of a heavy backing band.
+    ctx.shadowColor = L.halo.color;
+    ctx.shadowBlur = L.halo.blur * k;
   }
   drawHeader(ctx, m, t, k);
   if (ov.scaleBar) drawScaleBar(ctx, m, k);
   if (ov.legend) drawLegend(ctx, m, k);
   drawStrip(ctx, m, t, k);
   if (ov.attribution) drawFooterNote(ctx, m, k);
+  ctx.restore();
   if (opts.highlight) {
     const e = opts.highlight;
     ctx.strokeStyle = "rgba(255,255,255,0.85)";

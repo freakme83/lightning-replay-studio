@@ -128,7 +128,7 @@ test("4. events at the same timestamp share one video time and appear together",
 test("5. preview and exported composition use the same event-time mapping", () => {
   const dir = mkdtempSync(join(tmpdir(), "lr-test-"));
   try {
-    const settings = { duration: 17, trailMinutes: 12, markerScale: 1.3 };
+    const settings = { duration: 17, trailMinutes: 12, markerScale: 1.3, quality: "draft" };
     const { model } = buildComposition({ text: SAMPLE, filename: "sample-ankara-storm.json", settings, outDir: dir });
     // The composition runs byte-identical copies of the core modules the preview imports.
     const hash = (f) => createHash("sha256").update(readFileSync(f)).digest("hex");

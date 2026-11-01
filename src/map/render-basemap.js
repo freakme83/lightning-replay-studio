@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { join, dirname, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cameraOf, frameProjection } from "../core/projection.js";
+import { formatOfSize } from "../core/format.js";
 import { DEFAULT_PROVIDER, getProvider } from "./providers.js";
 import { normalizeLayers, layersKey } from "./layers.js";
 
@@ -19,7 +20,7 @@ const MAP_DIR = join(ROOT, "src", "map");
 const USER_AGENT = "LightningReplayStudio/1.1 (+https://github.com/freakme83/lightning-replay-studio)";
 // Basemap pixels must land within this distance of the replay projection (CSS px).
 export const ALIGNMENT_TOLERANCE_PX = 0.05;
-const RENDER_VERSION = 5; // bump when the render page or tuning changes (invalidates cache)
+const RENDER_VERSION = 6; // bump when the render page or tuning changes (invalidates cache)
 
 export class MapPrepError extends Error {
   constructor(message) {
@@ -122,7 +123,11 @@ function probePoints(proj, width, height, extra = []) {
 
 /**
  * @param o.frame {west,south,east,north} the locked frame (whole output viewport)
- * @param o.width, o.height output size in CSS px (e.g. 960 × 540)
+ * @param o.width, o.height design viewport in CSS px (960 × 540, 540 × 960 or 540 × 540: designViewport() in
+ *   src/core/format.js). The PNG is rasterised at exactly width·pixelRatio × height·pixelRatio, i.e. the output
+ *   size (pixelRatio 2 → 1920 × 1080 / 1080 × 1920 / 1080 × 1080; 1 → the Draft sizes). Draft and Full HD share the
+ *   camera, so both show the same features; only the pixel density differs.
+ * @param o.pixelRatio output px per design px (the format's k; default 2 = Full HD)
  * @param o.provider provider id (src/map/providers.js)
  * @param o.style optional ready MapLibre style object (tests / offline use), bypasses the provider fetch
  * @param o.styleUrl optional style URL override for the provider
@@ -141,7 +146,7 @@ export async function renderBasemap({
   const proj = frameProjection(frame, width, height);
   const camera = cameraOf(proj, width, height);
   const key = createHash("sha256")
-    .update(JSON.stringify({ RENDER_VERSION, provider, styleUrl, style, layers: layersKey(layers), camera, width, height, pixelRatio }))
+    .update(JSON.stringify({ RENDER_VERSION, provider, styleUrl, style, layers: layersKey(layers), camera, width, height, pixelRatio, format: formatOfSize(width, height) }))
     .digest("hex")
     .slice(0, 20);
   if (cacheDir && existsSync(join(cacheDir, `${key}.png`)) && existsSync(join(cacheDir, `${key}.json`))) {
@@ -186,7 +191,7 @@ export async function renderBasemap({
     const png = Buffer.from(r.png.split(",")[1], "base64");
     const meta = {
       id: key, provider, attribution: p.attribution, frame: proj.extentOf({ x: 0, y: 0, w: width, h: height }),
-      camera, width, height, pixelRatio, alignment: { maxErrorPx, probes: pts.length },
+      camera, width, height, pixelRatio, format: formatOfSize(width, height), output: [Math.round(width * pixelRatio), Math.round(height * pixelRatio)], alignment: { maxErrorPx, probes: pts.length },
       layers, layersKey: layersKey(layers), layerGroups: r.layerGroups,
     };
     if (cacheDir) {
