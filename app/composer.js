@@ -7,10 +7,11 @@
 import * as maplibregl from "/vendor/maplibre/maplibre-gl.mjs";
 import { cameraOf, frameFromCamera, frameProjection } from "/src/core/projection.js";
 import { loadProviderStyle, offlineStyle } from "/src/map/providers.js";
+import { availableGroups, layerPatches, normalizeLayers } from "/src/map/layers.js";
 
 const GUIDE_MARGIN = 0.07; // fraction of the stage kept around the guide, for context
 
-export async function createComposer({ container, guide, width, height, basemap, onChange = () => {}, onStatus = () => {} }) {
+export async function createComposer({ container, guide, width, height, basemap, layers: initialLayers = null, onChange = () => {}, onStatus = () => {} }) {
   const config = await fetch("/api/map-config").then((r) => r.json());
   let online = true;
   let style;
@@ -58,6 +59,17 @@ export async function createComposer({ container, guide, width, height, basemap,
       },
     });
   };
+  // Layer groups (roads, labels, …) are applied with the very patches the headless bake uses
+  // (src/map/layers.js), always computed from the unmodified tuned style.
+  let layers = normalizeLayers(initialLayers);
+  const layerGroups = availableGroups(style);
+  const applyLayerSettings = () => {
+    for (const p of layerPatches(style, layers)) {
+      if (!map.getLayer(p.id)) continue;
+      map.setLayoutProperty(p.id, "visibility", p.visibility);
+      for (const [prop, value] of Object.entries(p.paint)) map.setPaintProperty(p.id, prop, value);
+    }
+  };
   map.on("style.load", addStrikeLayer);
   map.on("error", (e) => {
     if (!online) return;
@@ -68,6 +80,7 @@ export async function createComposer({ container, guide, width, height, basemap,
   // Ready once the style is in; tiles keep streaming in the background.
   await new Promise((resolve) => (map.isStyleLoaded() ? resolve() : map.once("style.load", resolve)));
   addStrikeLayer();
+  applyLayerSettings();
 
   const guideRect = () => {
     const sw = container.clientWidth, sh = container.clientHeight;
@@ -110,6 +123,12 @@ export async function createComposer({ container, guide, width, height, basemap,
   return {
     map,
     online: () => online,
+    /** How many style layers each group controls (0 = not in this map style). */
+    layerGroups,
+    setLayers(next) {
+      layers = normalizeLayers(next);
+      applyLayerSettings();
+    },
     frame,
     camera,
     showFrame,

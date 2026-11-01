@@ -32,3 +32,33 @@ export function markerStyle(points) {
   };
 }
 export const isMagenta = (r, g, b) => r > 150 && b > 150 && g < 90;
+
+/**
+ * Offline style named like the real provider's layers: left of `lon` a blue "water" fill,
+ * right of it a green "landuse_park" fill, a magenta "boundary_state" line down the middle.
+ * Layer groups (src/map/layers.js) find them by id, so toggles show up as pixel changes.
+ */
+export function layerStyle(lon) {
+  const box = (w, e) => ({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[[w, -80], [e, -80], [e, 80], [w, 80], [w, -80]]] } });
+  const src = (f) => ({ type: "geojson", data: { type: "FeatureCollection", features: [f] } });
+  return {
+    version: 8,
+    sources: {
+      sea: src(box(-179, lon)),
+      park: src(box(lon, 179)),
+      border: { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [[lon, -80], [lon, 80]] } } },
+    },
+    layers: [
+      { id: "background", type: "background", paint: { "background-color": "#000000" } },
+      { id: "water", type: "fill", source: "sea", paint: { "fill-color": "#0000ff" } },
+      { id: "landuse_park", type: "fill", source: "park", paint: { "fill-color": "#00ff00" } },
+      { id: "boundary_state", type: "line", source: "border", paint: { "line-color": "#ff00ff", "line-width": 6 } },
+    ],
+  };
+}
+
+/** RGB of one pixel (x, y) in a decoded image from decodeRgb(). */
+export const pixel = (img, x, y) => {
+  const i = (Math.round(y) * img.width + Math.round(x)) * 3;
+  return [img.data[i], img.data[i + 1], img.data[i + 2]];
+};
