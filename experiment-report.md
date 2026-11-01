@@ -121,7 +121,7 @@ One improvement pass was applied, then the final render was made. There were no 
   `hyperframes check` reports a `dead_stretch` warning because it cannot see canvas changes; the snapshots and the
   decoded video confirm the frames do change.
 - **Time-range inputs** must be ISO strings with an offset. There is no date picker.
-- **Output size** in the UI is fixed at 960×540 at 24 fps. Other sizes are available from the CLI only.
+- **Output size** in the UI is fixed at 960×540 at 24 fps. Other sizes are available from the CLI only. *(Superseded: since PR #4 the UI offers landscape, portrait and square in Full HD or Draft.)*
 - **Very large datasets** (more than about 100k strikes) are untested. The preview event table renders every row.
 - Mixed UTC offsets are displayed in a single offset (the most common one), with a warning.
 

@@ -90,22 +90,68 @@ All of these are in the sidebar:
 | Keep faint dot for earlier strikes | Leaves a dim dot for every past strike, so the storm's footprint builds up |
 | Event time range | Optional start and end (ISO with offset). Strikes outside the range are excluded and counted. |
 | Map frame: Fit to Data | Frames every strike in the time range (plus 12 % padding) inside the HUD-free area |
-| Map frame: Lock Frame / Unlock | Confirms the 16:9 frame (prepares the map), or returns to editing it |
+| Video format | Landscape 16:9, Portrait 9:16 or Square 1:1, and Full HD or Draft quality (see below) |
+| Map frame: Lock Frame / Unlock | Confirms the video frame (prepares the map at the output size), or returns to editing it |
 | Map layers | Show or hide roads, place names, boundaries, water and land, and set each one's opacity (see below) |
-| Exact frame edges (advanced) | Type N/W/E/S; widened on one axis to keep the video's 16:9 shape |
+| Exact frame edges (advanced) | Type N/W/E/S; widened on one axis to keep the selected video shape |
 
 **Time mapping.** A strike at time *T* appears at
 `leadIn + (T − start) / (end − start) × (duration − leadIn − tail)`. `leadIn` is 1.2 s and `tail` is 1.8 s; both
 shrink for videos under 20 s. This keeps the relative spacing of strikes exact. Strikes that share a timestamp appear on the same frame.
 
+## Choose the video format and quality
+
+The **Video format** section has two independent settings:
+
+| Format | Full HD output | Draft output |
+| --- | --- | --- |
+| Landscape 16:9 (default) | 1920 × 1080 | 960 × 540 |
+| Portrait 9:16 | 1080 × 1920 | 540 × 960 |
+| Square 1:1 | 1080 × 1080 | 540 × 540 |
+
+**Full HD** (default) renders genuine Full HD: the map, strikes, rings, text and overlays are all drawn at the output
+resolution, nothing is upscaled. **Draft** is the same composition at half the size with the fast encoder preset, for
+checking a frame quickly. The sidebar always shows the exact pixel size.
+
+- **Adaptive framing.** The Map Composer's guide has the selected shape, and Fit to Data fits the strikes inside the HUD-free
+  part of *that* layout (and only for the HUD bands that are visible: with **Hide all** the strikes use the whole frame;
+  in portrait they stay out of the platform's top and bottom interface areas). Changing the format keeps the map centre and
+  fits your previous view inside the new shape, so nothing you framed is lost; the sidebar says what changed. Use Fit to Data
+  to re-frame for the new shape. A prepared basemap belongs to one shape, so a locked frame returns to editing and the map
+  is prepared again at the new size when you lock. Draft ↔ Full HD keeps the frame and only re-prepares the map.
+- **Never a crop.** A portrait frame is a different window on the same Web Mercator map with equal east/north scale, not
+  the landscape picture cropped or stretched: distances between strikes keep the same ratios in every format.
+- **Same detail at any quality.** The map and the HUD are laid out on a design viewport (960 × 540, or 540 × 960 / 540 × 540)
+  and rendered at 1× (Draft) or 2× (Full HD) pixel density, so both show the same features and labels; Full HD is simply
+  sharper. The basemap PNG has exactly the output pixel size, and its cache identity covers size, pixel density, format,
+  provider style and map layers.
+- **Overlay layouts** (`src/core/layout.js`, one small table per layout family): *landscape* is the classic HUD unchanged.
+  *Portrait* stacks it: title and clock at the top, below the top safe area; counter and scale bar, then the legend, then a
+  full-width activity chart and the credit line at the bottom, above the bottom safe area, with larger type. *Square* uses
+  compact top and bottom bands so the map stays dominant. Texts that would meet are shortened or scaled (the title shrinks
+  before it is shortened), the legend shrinks to fit, and no two overlays overlap; the eight switches stay independent and
+  **Hide all** leaves no gradient in any format.
+- **Encoding.** HyperFrames renders locally and encodes H.264 `yuv420p` (High profile, BT.709, `+faststart`) with
+  CRF 16 at the `looks` preset for Full HD (about 1 Mbit/s for these dark map scenes), and the fast `draft` preset for Draft.
+  CLI `--encode draft|looks|delivery` overrides the preset.
+
+![formats](docs/video-formats.jpg)
+
+*The synthetic Ankara storm in all three Full HD formats, with all overlays (top) and Hide all (bottom).*
+
+![Full HD vs 960 × 540](docs/fullhd-vs-960.jpg)
+
+*The same frame, before (960 × 540) and after (1920 × 1080), shown at the same size: place names, road lines, strike rings and HUD text are crisp.*
+
 ## Choose the map frame (Map Composer)
 
 A loaded dataset opens on a real, dark interactive map (MapLibre GL JS + OpenFreeMap) with its strikes as dots.
 
-1. **Navigate.** Drag to pan, scroll or use **+ / −** to zoom. The bright rectangle is the exact 960 × 540 video frame;
-   the area outside it is dimmed, and the hatched bands inside it sit under the replay's title and timeline HUD.
+1. **Navigate.** Drag to pan, scroll or use **+ / −** to zoom. The bright rectangle is the exact video frame in the
+   selected format (16:9, 9:16 or 1:1); the area outside it is dimmed, and the hatched bands inside it sit under the
+   replay's HUD (in portrait also under the platform's top and bottom interface areas).
 2. **Fit to Data** frames all strikes in the selected time range.
-3. **Lock Frame.** The studio prepares a basemap image for exactly that frame (about 2–4 s, cached in
+3. **Lock Frame.** The studio prepares a basemap image for exactly that frame, at the output size (about 2–5 s, cached in
    `work/basemaps/`). The stage then switches to the replay preview, drawn on that image: paused or playing, it is the
    exported video frame for frame. The sidebar reports the alignment check (MapLibre vs. replay projection).
 4. **Unlock / Edit Frame** returns to the map at the same framing.
@@ -115,9 +161,9 @@ why, and **export is blocked** until you tick *Use offline outline map* — a fa
 
 **Why positions match.** MapLibre and the replay both use Web Mercator: a map camera (centre, zoom) on a W × H viewport
 *is* the replay's projection with scale 512 · 2^zoom (`cameraOf` / `frameFromCamera` in `src/core/projection.js`).
-The locked frame is stored as its geographic edges, the basemap is rendered by headless MapLibre at exactly 960 × 540
-(×2 pixel ratio) from the camera derived from that frame, and every strike and the basemap go through the same
-projection. Map credit (OpenFreeMap © OpenMapTiles · Data © OpenStreetMap contributors) is drawn in every frame.
+The locked frame is stored as its geographic edges, the basemap is rendered by headless MapLibre at exactly the output
+size (see *Choose the video format*) from the camera derived from that frame, and every strike and the basemap go
+through the same projection. Map credit (OpenFreeMap © OpenMapTiles · Data © OpenStreetMap contributors) is drawn in every frame.
 
 ## Choose the map layers
 
@@ -200,14 +246,19 @@ label it yourself when you publish it.
 
 ## Export a new MP4
 
-**From the app.** Choose a quality (Draft, Standard or High) and click **Export MP4**. The render runs locally, and a
-20 s video takes about 7 s on an M4. The finished file is checked with ffprobe (codec, size, fps, duration, frame count) and
-can be played and downloaded in the sidebar. Files are saved to `exports/`.
+**From the app.** Choose the format and quality, lock the frame and click **Export MP4**. The render runs locally, and a
+20 s Full HD video takes about 8 s on an M4. The finished file is checked with ffprobe (codec, size, fps, duration, frame
+count) and can be played and downloaded in the sidebar. Files are saved to `exports/`, named with the format and size.
 
 **From the command line,** using the same pipeline:
 
 ```bash
-npm run render -- data/sample-ankara-storm.json -o demo.mp4 --duration 20 --quality delivery
+npm run render -- data/sample-ankara-storm.json -o demo.mp4 --duration 20
+```
+
+```bash
+npm run render -- data/sample-ankara-storm.json -o exports/ankara-portrait.mp4 --format portrait
+npm run render -- data/sample-ankara-storm.json -o exports/ankara-square-draft.mp4 --format square --quality draft
 ```
 
 ```bash
@@ -221,7 +272,9 @@ npm run render -- my-storm.csv -o exports/zoomed.mp4 --bounds 32.6,39.75,33.1,40
 The CLI prepares the same dark map (Fit to Data unless `--frame west,south,east,north` or `--bounds` is given). If the map
 cannot be prepared it stops; add `--outline` to export with the offline Natural Earth outlines instead.
 
-Other CLI options: `--layers` (map layers, see above), `--fps`, `--width`/`--height` (16:9 recommended), `--title`, `--keep` (keeps the
+Format options: `--format landscape|portrait|square` (default landscape) and `--quality hd|draft` (default `hd` = Full HD).
+Other CLI options: `--layers` (map layers, see above), `--overlays`, `--fps`, `--encode draft|looks|delivery` (x264 preset),
+`--width`/`--height` (an explicit size instead of `--format`/`--quality`, for advanced use), `--title`, `--keep` (keeps the
 generated HyperFrames project in `work/`).
 
 To build a contact sheet from any MP4:
@@ -257,12 +310,22 @@ Focused tests (`npm run test:map` runs only the map ones):
 15. The interactive MapLibre map and the baked PNG render the same pixels for the same layers.
 16. Layers behave the same for İstanbul and a southern-hemisphere fixture (São Paulo, synthetic).
 6d. An MP4 rendered with non-default layers shows exactly those layers.
+24. Format presets: Full HD and Draft sizes, aspect ratios, validation, defaults.
+25. Framing per format: Fit to Data respects the visible HUD, Hide all frees the frame, pan/zoom/lock behave.
+26. A format change keeps the centre and the old view; strikes stay geographically exact and unstretched; Draft = Full HD / 2.
+27. Overlay layout in every format and quality: no text overlaps, all text on a HUD band, portrait safe areas, legibility (+ a stress case).
+28. The three layouts: classic landscape coordinates, stacked portrait, compact square.
+29. Hide all: a completely clean frame in every format; each overlay stays on its own band.
+30. The basemap is baked at the output size (real MapLibre, offline style); cache identity covers size, format, layers.
+31. The composition declares the selected size.
+6f. Real Full HD MP4s in all three formats: size, fps, frame count, H.264 profile, strike and basemap alignment to the pixel,
+    and a clean Hide all frame.
 
 ## Project layout
 
 ```
 app/                 interactive preview (HTML/CSS/JS, no build step) · composer.js (Map Composer)
-src/core/            parse.js · timeline.js · projection.js · replay.js · overlays.js · draw.js
+src/core/            parse.js · timeline.js · projection.js · replay.js · format.js · layout.js · overlays.js · draw.js
                      shared by the preview AND the exported video (copied byte-identical)
 src/map/             providers.js (map provider + dark style tuning + offline style) · layers.js (layer groups) · render-basemap.js (headless bake)
 src/export/          composition.js (writes the HyperFrames project) · render.js (render + ffprobe)

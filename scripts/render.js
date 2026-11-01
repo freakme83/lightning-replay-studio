@@ -11,7 +11,11 @@
 //          --grid [--grid-opacity 0.5]   latitude/longitude grid (off by default)
 //          --outline   offline Natural Earth outlines instead of the online dark map
 //          --start <ISO> --end <ISO> --title <text>
-//          --width <px> --height <px> --quality draft|looks|delivery --keep (keep work dir)
+//          --format landscape|portrait|square   aspect ratio (default landscape 16:9)
+//          --quality hd|draft   resolution: hd = Full HD (1920×1080, 1080×1920, 1080×1080), draft = half (default hd)
+//          --width <px> --height <px>   explicit size instead of --format/--quality (advanced)
+//          --encode draft|looks|delivery   x264 preset override (default: draft for --quality draft, else looks, CRF-based)
+//          --keep (keep work dir)
 // Without --frame/--bounds the frame is fitted to the data (Fit to Data). The online map is
 // prepared once (needs internet); if that fails the export stops, use --outline to proceed.
 import { readFileSync, mkdirSync, rmSync } from "node:fs";
@@ -23,6 +27,7 @@ import { attributionLines, parseOverlaySpec } from "../src/core/overlays.js";
 import { parseDataset } from "../src/core/parse.js";
 import { buildReplay } from "../src/core/replay.js";
 import { renderBasemap } from "../src/map/render-basemap.js";
+import { QUALITIES, designViewport } from "../src/core/format.js";
 import { normalizeLayers, parseLayerSpec } from "../src/map/layers.js";
 
 const { values, positionals } = parseArgs({
@@ -45,7 +50,9 @@ const { values, positionals } = parseArgs({
     title: { type: "string" },
     width: { type: "string" },
     height: { type: "string" },
-    quality: { type: "string", default: "looks" },
+    format: { type: "string" },
+    quality: { type: "string" },
+    encode: { type: "string" },
     keep: { type: "boolean", default: false },
   },
 });
@@ -62,6 +69,8 @@ if (values.trail) settings.trailMinutes = Number(values.trail);
 if (values.scale) settings.markerScale = Number(values.scale);
 if (values.width) settings.width = Number(values.width);
 if (values.height) settings.height = Number(values.height);
+if (values.format) settings.format = values.format;
+if (values.quality) settings.quality = values.quality;
 if (values.title) settings.title = values.title;
 if (values.grid) settings.showGrid = true;
 try {
@@ -96,7 +105,9 @@ if (!values.outline) {
     const s0 = buildReplay(parsed, settings).settings;
     process.stdout.write("Preparing map… ");
     try {
-      mapImage = await renderBasemap({ frame: s0.frame, width: s0.width, height: s0.height, layers, cacheDir: join(ROOT, "work", "basemaps") });
+      // Baked at the output size: design viewport × pixelRatio = exactly width × height pixels.
+      const vp = designViewport(s0.width, s0.height);
+      mapImage = await renderBasemap({ frame: s0.frame, width: vp.width, height: vp.height, pixelRatio: vp.k, layers, cacheDir: join(ROOT, "work", "basemaps") });
     } catch (e) {
       console.error(`\n${e.message}\nRe-run with --outline to export with the offline Natural Earth outlines instead.`);
       process.exit(1);
@@ -114,9 +125,10 @@ const { model, dataset } = buildComposition({ text, filename: basename(input), s
 for (const w of dataset.warnings) console.warn(`warning: ${w}`);
 if (dataset.errors.length) console.warn(`${dataset.errors.length} record(s) rejected, e.g. ${dataset.errors[0]}`);
 const s = model.settings;
-console.log(`${model.totalEvents} strikes, ${s.duration} s @ ${s.fps} fps, ${s.width}×${s.height} → ${output}`);
+const encode = values.encode ?? QUALITIES[s.quality]?.encode ?? "looks";
+console.log(`${model.totalEvents} strikes, ${s.duration} s @ ${s.fps} fps, ${s.width}×${s.height} (${s.format}, ${s.quality}), encoder preset ${encode} → ${output}`);
 
-await renderComposition({ dir: workDir, output, fps: s.fps, quality: values.quality, onLog: (l) => process.stdout.write(l) });
+await renderComposition({ dir: workDir, output, fps: s.fps, quality: encode, onLog: (l) => process.stdout.write(l) });
 tagCredits(output, attributionLines({ mapAttribution: mapImage?.meta.attribution, outline: !mapImage, meta: dataset.meta }).join("\n"));
 const probe = probeVideo(output);
 const problems = checkVideo(probe, s);

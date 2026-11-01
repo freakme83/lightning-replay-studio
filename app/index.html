@@ -46,9 +46,24 @@
           </details>
         </section>
 
+        <section id="format-section">
+          <h2>Video format <span id="format-pill" class="pill">1920 × 1080</span></h2>
+          <div class="seg" id="format-seg" role="radiogroup" aria-label="Aspect ratio">
+            <button type="button" role="radio" data-format="landscape" title="Landscape 16:9 · 1920 × 1080"><i class="shape s169"></i>Landscape<em>16:9</em></button>
+            <button type="button" role="radio" data-format="portrait" title="Portrait 9:16 · 1080 × 1920"><i class="shape s916"></i>Portrait<em>9:16</em></button>
+            <button type="button" role="radio" data-format="square" title="Square 1:1 · 1080 × 1080"><i class="shape s11"></i>Square<em>1:1</em></button>
+          </div>
+          <div class="seg two" id="quality-seg" role="radiogroup" aria-label="Output quality">
+            <button type="button" role="radio" data-quality="hd" title="Genuine Full HD: map and overlays rendered at 1920 × 1080 (or 1080 × 1920 / 1080 × 1080)">Full HD</button>
+            <button type="button" role="radio" data-quality="draft" title="Half resolution and a fast encoder, for checking a composition quickly">Draft<em>half size</em></button>
+          </div>
+          <p class="note" id="format-size"></p>
+          <div id="format-state" class="map-state"></div>
+        </section>
+
         <section>
           <h2>Map frame <span id="frame-mode" class="pill">editing</span></h2>
-          <p class="note" id="frame-help">Drag to pan, scroll or +/− to zoom. The bright rectangle is the 16:9 video frame.</p>
+          <p class="note" id="frame-help">Drag to pan, scroll or +/− to zoom. The bright rectangle is the video frame.</p>
           <div class="row">
             <button id="fit" class="secondary" title="Frame all strikes in the selected time range">Fit to Data</button>
             <button id="lock">Lock Frame</button>
@@ -66,7 +81,7 @@
             <div class="row">
               <button id="apply-bounds" class="secondary">Show these edges</button>
             </div>
-            <p class="note">Edges are widened on one axis to keep the 16:9 video shape.</p>
+            <p class="note" id="edges-note">Edges are widened on one axis to keep the video shape.</p>
           </details>
         </section>
 
@@ -94,22 +109,17 @@
         <section>
           <h2>Export</h2>
           <div class="row">
-            <select id="quality">
-              <option value="draft">Draft (fast)</option>
-              <option value="looks" selected>Standard</option>
-              <option value="delivery">High</option>
-            </select>
             <button id="export">Export MP4</button>
           </div>
-          <p class="note">960 × 540 · 24 fps · H.264, rendered locally by HyperFrames with the locked map frame.</p>
+          <p class="note" id="export-note"></p>
           <div id="export-status" class="export-status"></div>
         </section>
       </aside>
 
-      <section class="stage-col">
+      <section class="stage-col" id="stage-col" data-format="landscape">
         <div class="stage" id="stage">
           <div id="map" class="map"></div>
-          <div id="frame-guide" class="frame-guide"><span class="frame-label">VIDEO FRAME · 960×540 · 16:9</span></div>
+          <div id="frame-guide" class="frame-guide"><span class="frame-label" id="frame-label">VIDEO FRAME</span></div>
           <canvas id="canvas" hidden></canvas>
           <div id="stage-status" class="stage-status" hidden></div>
           <div id="empty" class="empty">Load a dataset or a sample to begin.</div>

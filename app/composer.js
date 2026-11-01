@@ -11,7 +11,7 @@ import { availableGroups, layerPatches, normalizeLayers } from "/src/map/layers.
 
 const GUIDE_MARGIN = 0.07; // fraction of the stage kept around the guide, for context
 
-export async function createComposer({ container, guide, width, height, basemap, layers: initialLayers = null, onChange = () => {}, onStatus = () => {} }) {
+export async function createComposer({ container, guide, width: initialWidth, height: initialHeight, basemap, layers: initialLayers = null, onChange = () => {}, onStatus = () => {} }) {
   const config = await fetch("/api/map-config").then((r) => r.json());
   let online = true;
   let style;
@@ -83,6 +83,11 @@ export async function createComposer({ container, guide, width, height, basemap,
   addStrikeLayer();
   applyLayerSettings();
 
+  // The design viewport of the selected format (960×540, 540×960 or 540×540): its aspect shapes the
+  // guide, and the camera is expressed in it, exactly as the headless basemap bake does.
+  let width = initialWidth, height = initialHeight;
+  let hud = { top: 100 / 540, bottom: 92 / 540, safe: false }; // hatched HUD bands, as fractions of the frame height
+
   const guideRect = () => {
     const sw = container.clientWidth, sh = container.clientHeight;
     const aspect = width / height;
@@ -93,9 +98,10 @@ export async function createComposer({ container, guide, width, height, basemap,
   const placeGuide = () => {
     const g = guideRect();
     Object.assign(guide.style, { left: `${g.x}px`, top: `${g.y}px`, width: `${g.w}px`, height: `${g.h}px` });
-    // HUD bands of the replay (see drawFrame): strikes under them are hard to read.
-    guide.style.setProperty("--hud-top", `${(100 / 540) * g.h}px`);
-    guide.style.setProperty("--hud-bottom", `${(92 / 540) * g.h}px`);
+    // HUD bands of the replay (see drawFrame) and, in portrait, the platform safe areas: strikes under them are hard to read.
+    guide.style.setProperty("--hud-top", `${hud.top * g.h}px`);
+    guide.style.setProperty("--hud-bottom", `${hud.bottom * g.h}px`);
+    guide.classList.toggle("safe", hud.safe);
   };
 
   /** The output-frame camera ({lon, lat, zoom} at width × height) the guide currently shows. */
@@ -147,6 +153,20 @@ export async function createComposer({ container, guide, width, height, basemap,
     },
     resize() {
       map.resize();
+      placeGuide();
+    },
+    /** Hatched bands under the HUD, as fractions of the frame height ({top, bottom, safe}). */
+    setHud(next) {
+      hud = { ...hud, ...next };
+      placeGuide();
+    },
+    /**
+     * Switch to another output shape. The map centre stays; `showFrame(frame)` (called next by the
+     * studio) then zooms so the new aspect shows the area the old frame covered.
+     */
+    setViewport(w, h) {
+      width = w;
+      height = h;
       placeGuide();
     },
   };

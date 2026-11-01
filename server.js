@@ -13,6 +13,7 @@ import { renderComposition, probeVideo, checkVideo, tagCredits } from "./src/exp
 import { attributionLines } from "./src/core/overlays.js";
 import { renderBasemap, MapPrepError } from "./src/map/render-basemap.js";
 import { normalizeSettings } from "./src/core/replay.js";
+import { QUALITIES, designViewport } from "./src/core/format.js";
 import { DEFAULT_PROVIDER, getProvider } from "./src/map/providers.js";
 import { normalizeLayers } from "./src/map/layers.js";
 
@@ -124,11 +125,13 @@ function resolveExportMap(map) {
   throw new Error("No map prepared for this frame. Lock the frame (needs internet for map tiles), or tick “Use offline outline map” to export with the Natural Earth fallback.");
 }
 
-async function startExport({ text, filename, settings, quality, map }) {
+async function startExport({ text, filename, settings, encode, map }) {
   if (running) throw new Error("An export is already running. Wait for it to finish.");
   const mapImage = resolveExportMap(map);
   const id = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const name = `${safeName(filename)}-${settings?.duration ?? 20}s-${id}.mp4`;
+  // Validate the settings first: the file name and the encoder preset come from the normalised size.
+  const planned = normalizeSettings(settings);
+  const name = `${safeName(filename)}-${planned.format}-${planned.width}x${planned.height}-${planned.duration}s-${id}.mp4`;
   const job = { id, status: "building", log: "", output: `/exports/${name}`, startedAt: Date.now(), probe: null, problems: null, error: null };
   jobs.set(id, job);
   const workDir = join(ROOT, "work", `export-${id}`);
@@ -144,7 +147,8 @@ async function startExport({ text, filename, settings, quality, map }) {
     dir: workDir,
     output: outFile,
     fps: model.settings.fps,
-    quality: ["draft", "looks", "delivery"].includes(quality) ? quality : "looks",
+    // Draft uses the fast encoder preset; Full HD the CRF-based "looks" preset. `encode` overrides (CLI-style).
+    quality: ["draft", "looks", "delivery"].includes(encode) ? encode : QUALITIES[model.settings.quality]?.encode ?? "looks",
     onLog: (l) => { job.log = (job.log + l).slice(-20000); },
   })
     .then(() => {
@@ -174,14 +178,16 @@ const server = createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req, 5e6));
       let s;
       try {
-        s = normalizeSettings({ frame: body.frame, width: body.width, height: body.height });
+        s = normalizeSettings({ frame: body.frame, format: body.format, quality: body.quality });
         if (!s.frame) throw new Error("A map frame is required.");
       } catch (e) {
         return json(res, 400, { error: e.message });
       }
       try {
         const probes = Array.isArray(body.probes) ? body.probes.filter((p) => Array.isArray(p) && p.every(Number.isFinite)) : [];
-        const { meta, cached } = await renderBasemap({ frame: s.frame, width: s.width, height: s.height, provider: body.provider, layers: normalizeLayers(body.layers), probes, cacheDir: BASEMAP_DIR });
+        // Baked at the output size: design viewport × pixelRatio = exactly s.width × s.height pixels.
+        const vp = designViewport(s.width, s.height);
+        const { meta, cached } = await renderBasemap({ frame: s.frame, width: vp.width, height: vp.height, pixelRatio: vp.k, provider: body.provider, layers: normalizeLayers(body.layers), probes, cacheDir: BASEMAP_DIR });
         return json(res, 200, { ...meta, url: `/basemaps/${meta.id}.png`, cached });
       } catch (e) {
         return json(res, e instanceof MapPrepError ? 502 : 500, { error: e.message });

@@ -113,3 +113,12 @@ export function frameFromCamera(camera, width, height) {
 export function frameProjection(frame, width, height) {
   return createProjection(frame, { x: 0, y: 0, w: width, h: height });
 }
+
+/**
+ * The frame that shows `frame` inside a width × height viewport of another shape: same centre, and
+ * nothing of `frame` is cut off (the axis with spare room just shows more map). Used for format
+ * changes and for "exact edges" that do not match the video's aspect ratio.
+ */
+export function containFrame(frame, width, height) {
+  return frameProjection(frame, width, height).extentOf({ x: 0, y: 0, w: width, h: height });
+}

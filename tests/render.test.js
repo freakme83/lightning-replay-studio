@@ -40,8 +40,8 @@ test("6c. exported MP4: basemap features and strikes stay geographically aligned
     const known = [[32.8541, 39.9208], [32.55, 39.80], [33.15, 40.05]];
     const text = JSON.stringify(known.map(([lon, lat], i) => ({ id: `k${i}`, timestamp: `2026-11-01T14:${String(i * 10).padStart(2, "0")}:00+03:00`, lat, lon, type: "CG" })));
     const frame = frameProjection({ west: 32.2, south: 39.55, east: 33.5, north: 40.3 }, 960, 540).extentOf({ x: 0, y: 0, w: 960, h: 540 });
-    const settings = { duration: 3, trailMinutes: 120, frame };
-    const mapImage = await renderBasemap({ frame, width: 960, height: 540, style: markerStyle(known) });
+    const settings = { duration: 3, trailMinutes: 120, frame, quality: "draft" };
+    const mapImage = await renderBasemap({ frame, width: 960, height: 540, pixelRatio: 1, style: markerStyle(known) });
     const { model } = buildComposition({ text, filename: "known.json", settings, outDir: join(dir, "comp"), mapImage });
     const out = join(dir, "aligned.mp4");
     await renderComposition({ dir: join(dir, "comp"), output: out, fps: 24, quality: "draft" });
@@ -77,8 +77,8 @@ test("6d. exported MP4 shows exactly the selected map layers", { timeout: 300000
     const cam = cameraOf(frameProjection(frame, 960, 540), 960, 540);
     // Non-default layers: water off, parks at 50 %, boundaries hidden.
     const layers = { water: { visible: false }, land: { opacity: 0.5 }, boundaries: { visible: false } };
-    const mapImage = await renderBasemap({ frame, width: 960, height: 540, style: layerStyle(cam.lon), layers });
-    const { model } = buildComposition({ text, filename: "layers.json", settings: { duration: 2, frame }, outDir: join(dir, "comp"), mapImage });
+    const mapImage = await renderBasemap({ frame, width: 960, height: 540, pixelRatio: 1, style: layerStyle(cam.lon), layers });
+    const { model } = buildComposition({ text, filename: "layers.json", settings: { duration: 2, frame, quality: "draft" }, outDir: join(dir, "comp"), mapImage });
     const out = join(dir, "layers.mp4");
     await renderComposition({ dir: join(dir, "comp"), output: out, fps: 24, quality: "draft" });
     assert.deepEqual(checkVideo(probeVideo(out), model.settings), []);
@@ -108,9 +108,9 @@ test("6e. exported MP4: clean frame with all overlays off, mixed overlays, credi
     const frame = frameProjection({ west: 32.2, south: 39.55, east: 33.5, north: 40.3 }, 960, 540).extentOf({ x: 0, y: 0, w: 960, h: 540 });
     const cam = cameraOf(frameProjection(frame, 960, 540), 960, 540);
     // Left half of the map is solid blue "water", so any HUD band or text over it is easy to see.
-    const mapImage = await renderBasemap({ frame, width: 960, height: 540, style: layerStyle(cam.lon), layers: { land: { visible: false }, boundaries: { visible: false } } });
+    const mapImage = await renderBasemap({ frame, width: 960, height: 540, pixelRatio: 1, style: layerStyle(cam.lon), layers: { land: { visible: false }, boundaries: { visible: false } } });
     const lastFrame = async (name, overlays) => {
-      const { model } = buildComposition({ text, filename: "o.json", settings: { duration: 2, frame, overlays }, outDir: join(dir, name), mapImage });
+      const { model } = buildComposition({ text, filename: "o.json", settings: { duration: 2, frame, overlays, quality: "draft" }, outDir: join(dir, name), mapImage });
       const out = join(dir, `${name}.mp4`);
       await renderComposition({ dir: join(dir, name), output: out, fps: 24, quality: "draft" });
       assert.deepEqual(checkVideo(probeVideo(out), model.settings), []);
@@ -137,6 +137,85 @@ test("6e. exported MP4: clean frame with all overlays off, mixed overlays, credi
     assert.deepEqual([after.frames, after.width, after.height, after.codec], [before.frames, before.width, before.height, before.codec]);
     assert.match(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format_tags=comment", "-of", "csv=p=0", clean.out]).toString(), /OpenFreeMap/);
     assert.match(readFileSync(clean.out.replace(/\.mp4$/, ".credits.txt"), "utf8"), /OpenStreetMap/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("6f. Full HD MP4 in all three formats: size, fps, frames, H.264 profile, strike alignment, clean Hide all", { timeout: 900000 }, async (t) => {
+  const { renderBasemap } = await import("../src/map/render-basemap.js");
+  const { markerStyle, isMagenta, centroid, decodeRgb, layerStyle } = await import("./helpers.js");
+  const { outputSize, designViewport, QUALITIES } = await import("../src/core/format.js");
+  const { frameProjection, cameraOf } = await import("../src/core/projection.js");
+  const { fitFrame } = await import("../src/core/replay.js");
+  const { parseDataset } = await import("../src/core/parse.js");
+  const { noOverlays, defaultOverlays } = await import("../src/core/overlays.js");
+  const dir = mkdtempSync(join(tmpdir(), "lr-fullhd-"));
+  const known = [[32.8541, 39.9208], [32.55, 39.80], [33.15, 40.05]];
+  const text = JSON.stringify(known.map(([lon, lat], i) => ({ id: `k${i}`, timestamp: `2026-11-01T14:${String(i * 10).padStart(2, "0")}:00+03:00`, lat, lon, type: "CG" })));
+  const events = parseDataset(text, "known.json").events;
+  const lastFrame = (video, png) => execFileSync("ffmpeg", ["-v", "error", "-y", "-sseof", "-0.1", "-i", video, "-frames:v", "1", png]);
+  try {
+    for (const format of ["landscape", "portrait", "square"]) {
+      const { width: W, height: H } = outputSize(format, "hd");
+      const vp = designViewport(W, H);
+      const frame = fitFrame(events, W, H);
+      const encode = QUALITIES.hd.encode;
+
+      // (a) Strikes and basemap features land on the same output pixels in the MP4.
+      const ringMap = await renderBasemap({ frame, width: vp.width, height: vp.height, pixelRatio: vp.k, style: markerStyle(known) });
+      assert.deepEqual(ringMap.meta.output, [W, H], `${format}: the basemap is baked at the output size`);
+      const a = buildComposition({ text, filename: "known.json", settings: { duration: 3, trailMinutes: 120, frame, format, quality: "hd" }, outDir: join(dir, `${format}-a`), mapImage: ringMap });
+      const outA = join(dir, `${format}-a.mp4`);
+      await renderComposition({ dir: join(dir, `${format}-a`), output: outA, fps: 24, quality: encode });
+      const probe = probeVideo(outA);
+      assert.deepEqual(checkVideo(probe, a.model.settings), [], `${format}: ffprobe matches the request`);
+      assert.deepEqual([probe.width, probe.height, probe.frames, probe.fps], [W, H, 72, 24]);
+      assert.equal(probe.pixFmt, "yuv420p");
+      assert.match(probe.profile, /^(High|Main)$/, "broadly compatible H.264 profile");
+      const level = Number(execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=level", "-of", "csv=p=0", outA]).toString());
+      assert.ok(level <= 42, `H.264 level ${level / 10}`);
+      lastFrame(outA, join(dir, `${format}-a.png`));
+      const img = decodeRgb(join(dir, `${format}-a.png`));
+      assert.deepEqual([img.width, img.height], [W, H], "decoded frames have the output size");
+      const isMarker = (r, g, b) => r > 190 && g > 110 && g < 200 && b < 150;
+      for (const e of a.model.events) {
+        const ring = centroid(img, e.x, e.y, 44, isMagenta), dot = centroid(img, e.x, e.y, 16, isMarker);
+        assert.ok(ring && dot, `${format} ${e.id}: ring ${!!ring}, marker ${!!dot}`);
+        t.diagnostic(`${format} ${W}×${H} ${e.id}: basemap ring ${Math.hypot(ring[0] - e.x, ring[1] - e.y).toFixed(2)} px, strike marker ${Math.hypot(dot[0] - e.x, dot[1] - e.y).toFixed(2)} px from the projected coordinate`);
+        assert.ok(Math.hypot(ring[0] - e.x, ring[1] - e.y) < 1, `${format} ${e.id}: ring offset`);
+        // The marker's centroid comes from a thresholded, partly faded disc, so allow 1.5 output px (0.75 design px).
+        assert.ok(Math.hypot(dot[0] - e.x, dot[1] - e.y) < 1.5, `${format} ${e.id}: marker offset`);
+      }
+
+      // (b) Hide all gives the bare map in the HUD bands; the default overlays do not.
+      const cam = cameraOf(frameProjection(frame, vp.width, vp.height), vp.width, vp.height);
+      const blue = await renderBasemap({ frame, width: vp.width, height: vp.height, pixelRatio: vp.k, style: layerStyle(cam.lon + 5), layers: { land: { visible: false }, boundaries: { visible: false } } });
+      const bands = async (name, overlays) => {
+        const built = buildComposition({ text, filename: "o.json", settings: { duration: 2, frame, format, quality: "hd", overlays }, outDir: join(dir, `${format}-${name}`), mapImage: blue });
+        const out = join(dir, `${format}-${name}.mp4`);
+        await renderComposition({ dir: join(dir, `${format}-${name}`), output: out, fps: 24, quality: "draft" });
+        lastFrame(out, join(dir, `${format}-${name}.png`));
+        const im = decodeRgb(join(dir, `${format}-${name}.png`));
+        const L = built.model.layout, k = L.k;
+        // Left third of the frame is the plain blue map; count pixels that differ from it inside each band.
+        const dev = (y0, y1) => {
+          let n = 0, worst = 0;
+          const ref = [0, 0, (im.data[(Math.round(H / 2) * W + Math.round(W * 0.1)) * 3 + 2])];
+          for (let y = Math.round(y0); y < Math.round(y1); y++) for (let x = Math.round(W * 0.03); x < Math.round(W * 0.33); x++) {
+            const i = (y * W + x) * 3, d = Math.max(Math.abs(im.data[i] - ref[0]), Math.abs(im.data[i + 1] - ref[1]), Math.abs(im.data[i + 2] - ref[2]));
+            worst = Math.max(worst, d);
+            if (d > 40) n++;
+          }
+          return { n, worst };
+        };
+        return { top: dev(0, L.bands.top * k), bottom: dev(H - L.bands.bottom * k, H) };
+      };
+      const clean = await bands("clean", noOverlays()), full = await bands("full", defaultOverlays());
+      t.diagnostic(`${format}: pixels differing from the bare map in the HUD bands — Hide all top ${clean.top.n} / bottom ${clean.bottom.n}; all overlays top ${full.top.n} / bottom ${full.bottom.n}`);
+      assert.equal(clean.top.n + clean.bottom.n, 0, `${format}: Hide all leaves nothing but the map in the bands (worst diff ${Math.max(clean.top.worst, clean.bottom.worst)})`);
+      assert.ok(full.top.n > 500 && full.bottom.n > 500, `${format}: the default overlays are drawn in both bands`);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

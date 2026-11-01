@@ -1,14 +1,18 @@
 // Builds the replay model: the one object both the preview and the exported video draw from.
 import { createTimeMap } from "./timeline.js";
-import { autoBounds, cameraOf, createProjection, frameProjection, validateBounds } from "./projection.js";
+import { autoBounds, createProjection, frameProjection, validateBounds } from "./projection.js";
 import { parseTimestamp } from "./parse.js";
-import { defaultOverlays, normalizeOverlays } from "./overlays.js";
+import { defaultOverlays, normalizeOverlays, zoneVisible } from "./overlays.js";
+import { DEFAULT_FORMAT, DEFAULT_QUALITY, FORMATS, QUALITIES, outputSize, presetOfSize } from "./format.js";
+import { designCamera, layoutFor } from "./layout.js";
 
 export const DEFAULTS = Object.freeze({
   duration: 20, // output video seconds
   fps: 24,
-  width: 960,
-  height: 540,
+  format: DEFAULT_FORMAT, // landscape | portrait | square (src/core/format.js)
+  quality: DEFAULT_QUALITY, // hd = Full HD | draft = half resolution
+  width: null, // output px; derived from format + quality unless a size is given explicitly (CLI --width/--height)
+  height: null,
   trailMinutes: 20, // residual marker lifetime, in dataset minutes
   markerScale: 1, // visual size multiplier for strike markers
   showHistory: true, // keep a faint dot for every earlier strike
@@ -21,10 +25,16 @@ export const DEFAULTS = Object.freeze({
   title: null,
 });
 
-/** Area of the frame strikes are fitted into (the HUD bands stay clear). */
-export function mapRect(width, height) {
-  const k = width / 960;
-  return { x: 40 * k, y: 98 * k, w: width - 80 * k, h: height - 98 * k - 104 * k };
+/**
+ * Area of the frame strikes are fitted into: clear of the HUD bands that are visible (and, when a
+ * band is hidden, of the platform safe area or a small edge margin). Margins come from the layout.
+ */
+export function mapRect(width, height, overlays = defaultOverlays()) {
+  const L = layoutFor(width, height), k = L.k;
+  const top = (zoneVisible(overlays, "top", L) ? L.fit.top : L.fit.edgeTop) * k;
+  const bottom = (zoneVisible(overlays, "bottom", L) ? L.fit.bottom : L.fit.edgeBottom) * k;
+  const side = L.fit.side * k;
+  return { x: side, y: top, w: width - 2 * side, h: height - top - bottom };
 }
 
 export function normalizeSettings(settings = {}) {
@@ -36,8 +46,18 @@ export function normalizeSettings(settings = {}) {
   };
   s.duration = num(s.duration, "Video duration (s)", 2, 3600);
   s.fps = num(s.fps, "Frame rate", 1, 120);
-  s.width = Math.round(num(s.width, "Width", 160, 3840));
-  s.height = Math.round(num(s.height, "Height", 90, 2160));
+  // Size: a format + quality preset, unless a width × height is given explicitly (CLI only).
+  const given = (v) => v !== null && v !== undefined && v !== "";
+  if (given(settings.width) !== given(settings.height)) throw new Error("Give both width and height, or neither (use format and quality instead).");
+  if (given(settings.width)) {
+    s.width = Math.round(num(settings.width, "Width", 160, 3840));
+    s.height = Math.round(num(settings.height, "Height", 90, 3840));
+    Object.assign(s, presetOfSize(s.width, s.height));
+  } else {
+    if (!FORMATS[s.format]) throw new Error(`Unknown video format "${s.format}". Formats: ${Object.keys(FORMATS).join(", ")}.`);
+    if (!QUALITIES[s.quality]) throw new Error(`Unknown video quality "${s.quality}". Qualities: ${Object.keys(QUALITIES).join(", ")}.`);
+    Object.assign(s, outputSize(s.format, s.quality));
+  }
   s.trailMinutes = num(s.trailMinutes, "Trail duration (min)", 0, 1440);
   s.markerScale = num(s.markerScale, "Marker size", 0.25, 4);
   s.showHistory = s.showHistory !== false && s.showHistory !== "false";
@@ -124,10 +144,11 @@ export function filterBasemap(basemap, extent, pad = 0.5) {
  * The video frame that "Fit to Data" selects: the strikes (padded) fitted inside the
  * HUD-free map area, extended to the full width × height canvas.
  */
-export function fitFrame(events, width = DEFAULTS.width, height = DEFAULTS.height) {
+export function fitFrame(events, width, height, overlays = defaultOverlays()) {
+  if (!width || !height) ({ width, height } = outputSize(DEFAULT_FORMAT, DEFAULT_QUALITY));
   const bounds = autoBounds(events);
   if (!bounds) return null;
-  return createProjection(bounds, mapRect(width, height)).extentOf({ x: 0, y: 0, w: width, h: height });
+  return createProjection(bounds, mapRect(width, height, overlays)).extentOf({ x: 0, y: 0, w: width, h: height });
 }
 
 /** Project the visible basemap once per model. */
@@ -157,7 +178,7 @@ export function buildReplay(dataset, settings = {}, assets = {}) {
   // A locked map frame covers the whole canvas; otherwise strikes (or manual bounds) are
   // fitted into the HUD-free area as in v1.
   const bounds = s.frame ?? s.bounds ?? autoBounds(inRange);
-  const proj = s.frame ? frameProjection(s.frame, s.width, s.height) : createProjection(bounds, mapRect(s.width, s.height));
+  const proj = s.frame ? frameProjection(s.frame, s.width, s.height) : createProjection(bounds, mapRect(s.width, s.height, s.overlays));
   const mapImage = assets.mapImage ?? null;
   const weights = visualWeights(inRange, dataset.meta);
 
@@ -196,8 +217,9 @@ export function buildReplay(dataset, settings = {}, assets = {}) {
     bounds,
     autoFitted: !s.bounds && !s.frame,
     extent,
-    /** MapLibre camera that renders exactly this frame at settings.width × settings.height. */
-    camera: cameraOf(proj, s.width, s.height),
+    layout: layoutFor(s.width, s.height),
+    /** MapLibre camera (design px, see designCamera) that renders exactly this frame at any quality of this format. */
+    camera: designCamera(proj, s.width, s.height),
     mapImage,
     events,
     bins,

@@ -4,10 +4,12 @@
 // one basemap PNG for that exact frame → preview and export both draw that PNG.
 import { parseDataset, formatLocal, formatOffset, toIsoWithOffset } from "/src/core/parse.js";
 import { buildReplay, DEFAULTS, normalizeSettings, resolveTimeRange } from "/src/core/replay.js";
-import { autoBounds, frameProjection } from "/src/core/projection.js";
+import { FORMATS, QUALITIES, describeSize, designViewport, outputSize } from "/src/core/format.js";
+import { layoutFor } from "/src/core/layout.js";
+import { autoBounds, containFrame } from "/src/core/projection.js";
 import { drawFrame } from "/src/core/draw.js";
 import { createComposer } from "./composer.js";
-import { OVERLAYS, defaultOverlays, noOverlays, normalizeOverlays, attributionLines } from "/src/core/overlays.js";
+import { OVERLAYS, defaultOverlays, noOverlays, normalizeOverlays, attributionLines, zoneVisible } from "/src/core/overlays.js";
 import { LAYER_GROUPS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
 
 const $ = (id) => document.getElementById(id);
@@ -22,12 +24,14 @@ const state = {
   geo: null,
   t: 0,
   playing: false,
+  format: "landscape", // video aspect ratio: landscape | portrait | square (src/core/format.js)
+  quality: "hd", // output resolution: hd (Full HD) | draft (half size)
   frame: null, // {west, south, east, north} of the whole video frame
   mode: "compose", // "compose" (editing the frame on the map) | "locked"
   mapImage: null, // { image, attribution, id, meta } once the basemap for the locked frame is baked
   mapError: null,
   mapBusy: false, // a basemap bake is in flight
-  bakingKey: null, // layer settings of the bake in flight
+  bakingKey: null, // layer settings + output size of the bake in flight
   mapLayers: defaultLayers(), // geographic layers behind the replay (roads, labels, …)
   grid: { visible: false, opacity: 0.5 }, // lat/lon graticule: drawn by the replay renderer, not part of the map image
   overlays: defaultOverlays(), // informational video overlays (title, clock, counter, …): drawn by the replay renderer
@@ -66,8 +70,8 @@ function readSettings() {
     frame: state.frame,
     timeRange: start || end ? { start: start || null, end: end || null } : null,
     fps: DEFAULTS.fps,
-    width: DEFAULTS.width,
-    height: DEFAULTS.height,
+    format: state.format,
+    quality: state.quality,
   };
 }
 
@@ -157,7 +161,12 @@ function updateInfo() {
 }
 
 // ---------- map frame ----------
-const W = DEFAULTS.width, H = DEFAULTS.height;
+/** Output pixels of the selected format and quality, and the design viewport the map is composed in. */
+const outSize = () => outputSize(state.format, state.quality);
+const viewport = () => { const o = outSize(); return designViewport(o.width, o.height); };
+const outKey = () => { const o = outSize(); return `${o.width}x${o.height}`; };
+/** Identity of the map image a bake produces: layer settings + output size (format and quality). */
+const bakeKey = () => `${layersKey(state.mapLayers)}|${outKey()}`;
 
 /** Fit to Data: the v1 auto-fit layout (strikes inside the HUD-free area) as a full frame. */
 function fitToDataFrame() {
@@ -180,8 +189,8 @@ function stageStatus(text, bad = false) {
   el.classList.toggle("bad", bad);
 }
 
-/** Is the prepared map out of date with the layer settings (or missing)? */
-const mapIsStale = () => !state.mapImage || state.mapImage.layersKey !== layersKey(state.mapLayers);
+/** Is the prepared map out of date with the layer settings or the output size (or missing)? */
+const mapIsStale = () => !state.mapImage || state.mapImage.bakeKey !== bakeKey();
 
 function updateFrameUi() {
   const locked = state.mode === "locked";
@@ -189,7 +198,7 @@ function updateFrameUi() {
   const failed = locked && !state.mapImage && state.mapError;
   const layersFailed = locked && state.mapImage && state.mapError;
   const updating = locked && (state.mapBusy || (state.mapImage && mapIsStale() && !state.mapError));
-  pill.textContent = !locked ? "editing" : failed ? "map failed" : layersFailed ? "layers not applied" : updating ? (state.mapImage ? "updating layers…" : "preparing…") : "locked";
+  pill.textContent = !locked ? "editing" : failed ? "map failed" : layersFailed ? "map not updated" : updating ? (state.mapImage ? "updating map…" : "preparing…") : "locked";
   pill.className = `pill ${!locked ? "editing" : failed || layersFailed ? "failed" : "locked"}`;
   $("lock").textContent = locked ? "Unlock / Edit Frame" : "Lock Frame";
   $("lock").classList.toggle("secondary", locked);
@@ -199,7 +208,7 @@ function updateFrameUi() {
   if (locked && wasHidden) sizeCanvas(); // the canvas had no layout size while hidden
   $("frame-help").textContent = locked
     ? "Frame locked: the preview below is exactly what the MP4 will show."
-    : "Drag to pan, scroll or +/− to zoom. The bright rectangle is the 16:9 video frame; hatched bands sit under the HUD.";
+    : `Drag to pan, scroll or +/− to zoom. The bright rectangle is the ${FORMATS[state.format].ratio} video frame; hatched bands sit under the HUD${state.format === "portrait" ? " and the platform's top/bottom interface areas" : ""}.`;
   $("outline-row").hidden = !failed && !layersFailed && !(state.composer && !state.composer.online());
   for (const id of ["play", "prev", "next", "scrub"]) $(id).disabled = !locked;
   updateExportButton();
@@ -218,7 +227,7 @@ function updateExportButton() {
   $("export").disabled = !state.dataset || !ready;
   $("export").title = ready ? ""
     : state.mode !== "locked" ? "Lock the frame first"
-    : state.mapBusy || (state.mapImage && !state.mapError) ? "Waiting for the map layers to finish updating"
+    : state.mapBusy || (state.mapImage && !state.mapError) ? "Waiting for the map to finish updating"
     : "Map not prepared — tick the offline outline option to export anyway";
 }
 
@@ -240,6 +249,7 @@ function enterCompose(frame) {
 
 async function lockFrame() {
   if (!state.dataset) return;
+  formatNote("");
   if (state.composer) state.frame = state.composer.frame();
   state.mode = "locked";
   state.mapImage = null;
@@ -257,19 +267,20 @@ async function bakeMap({ keepImage }) {
   clearTimeout(state.layerTimer);
   const token = ++state.lockToken;
   const layers = structuredClone(state.mapLayers);
-  const key = layersKey(layers);
+  const key = bakeKey();
   state.bakingKey = key;
   state.mapBusy = true;
   state.mapError = null;
   if (!keepImage) state.mapImage = null;
   updateFrameUi();
-  stageStatus(keepImage ? "Updating map layers…" : "Preparing map for this frame…");
-  setMapState(keepImage ? "Updating map layers…" : "Preparing map…");
+  const o = outSize();
+  stageStatus(keepImage ? `Updating the map (${o.width} × ${o.height})…` : `Preparing the map at ${o.width} × ${o.height}…`);
+  setMapState(keepImage ? "Updating map…" : `Preparing map at ${o.width} × ${o.height}…`);
   try {
     const res = await fetch("/api/basemap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ frame: state.frame, width: W, height: H, layers, probes: state.model.events.slice(0, 200).map((e) => [e.lon, e.lat]) }),
+      body: JSON.stringify({ frame: state.frame, format: state.format, quality: state.quality, layers, probes: state.model.events.slice(0, 200).map((e) => [e.lon, e.lat]) }),
     });
     const meta = await res.json();
     if (!res.ok) throw new Error(meta.error ?? `Map preparation failed (${res.status}).`);
@@ -277,15 +288,15 @@ async function bakeMap({ keepImage }) {
     image.src = meta.url;
     await image.decode();
     if (token !== state.lockToken) return; // unlocked, or a newer bake took over
-    state.mapImage = { image, attribution: meta.attribution, id: meta.id, meta, layersKey: key };
+    state.mapImage = { image, attribution: meta.attribution, id: meta.id, meta, bakeKey: key };
     stageStatus(null);
-    setMapState(`<span class="ok">Map ready ✓</span> ${esc(meta.provider)} · zoom ${meta.camera.zoom.toFixed(2)} · alignment ${meta.alignment.maxErrorPx < 0.001 ? "&lt;0.001" : meta.alignment.maxErrorPx.toFixed(3)} px${meta.cached ? " · cached" : ""}`);
+    setMapState(`<span class="ok">Map ready ✓</span> ${esc(meta.provider)} · ${meta.output.join(" × ")} px · zoom ${meta.camera.zoom.toFixed(2)} · alignment ${meta.alignment.maxErrorPx < 0.001 ? "&lt;0.001" : meta.alignment.maxErrorPx.toFixed(3)} px${meta.cached ? " · cached" : ""}`);
   } catch (e) {
     if (token !== state.lockToken) return;
     state.mapError = e.message;
     stageStatus(
       state.mapImage
-        ? "Couldn't update the map layers — still showing the previous map. Export is blocked until it updates."
+        ? "Couldn't update the map — still showing the previous map. Export is blocked until it updates."
         : "Map unavailable — previewing offline outlines. Export is blocked until you choose the outline fallback.",
       true,
     );
@@ -296,6 +307,70 @@ async function bakeMap({ keepImage }) {
   rebuild();
   updateFrameUi();
 }
+
+// ---------- video format ----------
+/** Hatched bands of the composer guide: the visible HUD bands, plus the platform safe areas in portrait. */
+function updateHud() {
+  const o = outSize();
+  const L = layoutFor(o.width, o.height);
+  const safe = L.kind === "portrait";
+  const top = zoneVisible(state.overlays, "top", L) ? L.bands.top : safe ? L.safe.top : 0;
+  const bottom = zoneVisible(state.overlays, "bottom", L) ? L.bands.bottom : safe ? L.safe.bottom : 0;
+  state.composer?.setHud({ top: top / L.Hu, bottom: bottom / L.Hu, safe });
+}
+
+function syncFormatControls() {
+  const o = outSize(), f = FORMATS[state.format], q = QUALITIES[state.quality];
+  for (const b of $("format-seg").children) b.setAttribute("aria-checked", String(b.dataset.format === state.format));
+  for (const b of $("quality-seg").children) b.setAttribute("aria-checked", String(b.dataset.quality === state.quality));
+  $("format-pill").textContent = `${o.width} × ${o.height}`;
+  $("format-size").textContent = `${o.width} × ${o.height} px · ${f.ratio} · ${DEFAULTS.fps} fps · ${q.id === "hd" ? "Full HD: the map is rendered at this size" : "Draft: half size, fast encode"}`;
+  $("export-note").textContent = `${o.width} × ${o.height} · ${DEFAULTS.fps} fps · H.264 yuv420p, ${q.id === "hd" ? "CRF-based" : "fast draft"} encode, rendered locally by HyperFrames with the locked map frame.`;
+  $("frame-label").textContent = `VIDEO FRAME · ${o.width}×${o.height} · ${f.ratio}`;
+  $("edges-note").textContent = `Edges are widened on one axis to keep the ${f.ratio} video shape.`;
+  $("stage-col").dataset.format = state.format;
+  $("export").textContent = `Export ${q.id === "hd" ? "Full HD" : "Draft"} MP4`;
+}
+
+const formatNote = (html) => { $("format-state").innerHTML = html; };
+
+/**
+ * Another aspect ratio. The map centre stays and the old frame is fitted inside the new shape, so
+ * nothing that was in view is lost; Fit to Data re-frames the strikes. A prepared basemap belongs to
+ * one shape, so a locked frame returns to editing and the map is prepared again on the next lock.
+ */
+function setFormat(format) {
+  if (!FORMATS[format] || format === state.format) return;
+  const wasLocked = state.mode === "locked", f = FORMATS[format];
+  state.format = format;
+  syncFormatControls();
+  const vp = viewport(), o = outSize();
+  state.composer?.setViewport(vp.width, vp.height);
+  updateHud();
+  if (!state.dataset) return;
+  if (state.frame) state.frame = containFrame(state.frame, o.width, o.height);
+  enterCompose(state.frame);
+  formatNote(wasLocked
+    ? `<span class="warn">${f.label} ${f.ratio}: the prepared map no longer fits, so the frame is unlocked.</span> Same centre, the previous view is kept inside the new shape. Lock the frame to prepare the map at ${o.width} × ${o.height}.`
+    : `${f.label} ${f.ratio}: same centre, the area you had in view still fits. Fit to Data re-frames the strikes for this shape.`);
+}
+
+/** Draft ↔ Full HD: same frame and camera, different pixel density; a locked map is prepared again at the new size. */
+function setQuality(quality) {
+  if (!QUALITIES[quality] || quality === state.quality) return;
+  state.quality = quality;
+  syncFormatControls();
+  const o = outSize();
+  if (!state.dataset) return;
+  rebuild();
+  if (state.mode === "locked") {
+    scheduleRebake();
+    formatNote(`${QUALITIES[quality].label}: preparing the map at ${o.width} × ${o.height}. Export unlocks when it is ready.`);
+  } else formatNote(`${QUALITIES[quality].label}: the map is prepared at ${o.width} × ${o.height} when you lock the frame.`);
+}
+
+$("format-seg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setFormat(b.dataset.format); });
+$("quality-seg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setQuality(b.dataset.quality); });
 
 // ---------- map layers ----------
 function buildLayerControls() {
@@ -334,14 +409,14 @@ function setLayers(next) {
   scheduleRebake();
 }
 
-/** After a layer change on a locked frame: re-bake only the map, once the controls settle. */
+/** After a layer or output-size change on a locked frame: re-bake only the map, once the controls settle. */
 function scheduleRebake() {
   clearTimeout(state.layerTimer);
   updateFrameUi(); // marks the prepared map stale, which blocks export straight away
   if (state.mode !== "locked") return;
   state.layerTimer = setTimeout(() => {
-    const key = layersKey(state.mapLayers);
-    if (state.mapBusy ? state.bakingKey === key : state.mapImage?.layersKey === key) return; // nothing changed
+    const key = bakeKey();
+    if (state.mapBusy ? state.bakingKey === key : state.mapImage?.bakeKey === key) return; // nothing changed
     bakeMap({ keepImage: !!state.mapImage });
   }, 450);
 }
@@ -389,6 +464,7 @@ function syncOverlayControls() {
 function setOverlays(next) {
   state.overlays = normalizeOverlays(next);
   syncOverlayControls();
+  updateHud();
   if (state.model) {
     state.model.settings.overlays = state.overlays;
     draw();
@@ -451,7 +527,8 @@ function sizeCanvas() {
   const m = state.model;
   const w = m?.settings.width ?? 960, h = m?.settings.height ?? 540;
   const rect = canvas.getBoundingClientRect();
-  const dpr = Math.max(1, Math.min(3, (rect.width * devicePixelRatio) / w));
+  // The preview draws at screen size, not export size: the frame is drawn in output px and scaled down.
+  const dpr = Math.max(0.25, Math.min(3, (rect.width * devicePixelRatio) / w));
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(h * dpr);
   draw();
@@ -577,7 +654,6 @@ async function startExport() {
       text: state.text,
       filename: state.filename,
       settings: readSettings(),
-      quality: $("quality").value,
       map: exportMap(),
     }),
   });
@@ -635,6 +711,7 @@ $("scale").addEventListener("input", () => rebuild());
 $("history").addEventListener("change", () => rebuild());
 $("fit").addEventListener("click", () => {
   if (!state.dataset) return;
+  formatNote("");
   state.frame = fitToDataFrame();
   enterCompose(state.frame);
 });
@@ -644,7 +721,8 @@ $("apply-bounds").addEventListener("click", () => {
   const b = { west: +$("b-west").value, south: +$("b-south").value, east: +$("b-east").value, north: +$("b-north").value };
   try {
     // Widen to the video's aspect ratio; validates the numbers too.
-    state.frame = frameProjection(normalizeSettings({ frame: b }).frame, W, H).extentOf({ x: 0, y: 0, w: W, h: H });
+    const { width: W, height: H } = viewport();
+    state.frame = containFrame(normalizeSettings({ frame: b }).frame, W, H);
   } catch (e) {
     setMapState(`<span class="bad">${esc(e.message)}</span>`);
     return;
@@ -685,8 +763,8 @@ setMapState("Loading map…");
 createComposer({
   container: $("map"),
   guide: $("frame-guide"),
-  width: W,
-  height: H,
+  width: viewport().width,
+  height: viewport().height,
   basemap: state.geo.basemap,
   layers: state.mapLayers,
   onChange: (frame, camera) => {
@@ -702,6 +780,8 @@ createComposer({
     state.composer = composer;
     if (!composer.online()) setMapState(`<span class="bad">Online map unavailable.</span> Framing uses offline outlines.`);
     else if (state.mode === "compose") setMapState("");
+    composer.setViewport(viewport().width, viewport().height);
+    updateHud();
     if (state.frame) composer.showFrame(state.frame);
     if (state.model) composer.setStrikes(state.model.events);
     composer.setInteractive(state.mode === "compose");
@@ -713,6 +793,7 @@ createComposer({
     // No interactive map (e.g. WebGL unavailable): frames come from Fit to Data / exact edges.
     setMapState(`<span class="bad">Interactive map unavailable: ${esc(e.message)}</span>`);
   });
+syncFormatControls();
 buildLayerControls();
 syncLayerControls();
 syncGridControls();
@@ -722,4 +803,4 @@ updateLayersState();
 await loadSample();
 sizeCanvas();
 // Exposed for automated checks in the browser.
-window.__studio = { state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame, setLayers, bakeMap };
+window.__studio = { state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame, setLayers, bakeMap, setFormat, setQuality, setOverlays };

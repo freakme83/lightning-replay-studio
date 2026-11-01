@@ -78,7 +78,12 @@ details summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
 .export-status a { color: var(--signal); }
 
 .stage-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px; gap: 10px; }
-.stage { position: relative; width: 100%; max-width: calc((100vh - 360px) * 16 / 9); min-width: 480px; aspect-ratio: 16 / 9; margin: 0 auto; background: var(--ground); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+/* The stage takes the aspect ratio of the selected video format (--ar), so the guide, the locked
+   preview and the MP4 all show the same shape. Portrait may use more height: the page scrolls. */
+.stage-col { --ar: 1.7778; --max-h: calc(100vh - 360px); --min-w: 480px; }
+.stage-col[data-format="portrait"] { --ar: 0.5625; --max-h: calc(100vh - 215px); --min-w: 300px; }
+.stage-col[data-format="square"] { --ar: 1; --max-h: calc(100vh - 330px); --min-w: 380px; }
+.stage { position: relative; width: min(100%, calc(var(--max-h) * var(--ar))); min-width: var(--min-w); aspect-ratio: var(--ar); margin: 0 auto; background: var(--ground); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; background: var(--ground); }
 .stage canvas[hidden] { display: none; }
 .stage .map { position: absolute; inset: 0; z-index: 0; } /* own stacking context, so the guide paints above the WebGL canvas */
@@ -102,11 +107,11 @@ details summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
 .empty[hidden] { display: none; }
 .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); }
 
-.transport { display: flex; align-items: center; gap: 8px; width: 100%; max-width: calc((100vh - 360px) * 16 / 9); min-width: 480px; margin: 0 auto; }
+.transport { display: flex; align-items: center; gap: 8px; width: min(100%, max(480px, calc(var(--max-h) * var(--ar)))); margin: 0 auto; }
 .icon { background: var(--panel-2); color: var(--ink); border: 1px solid var(--line); width: 34px; height: 30px; padding: 0; font-size: 13px; }
 .icon.play { background: var(--signal); color: #031513; width: 42px; }
 #scrub { flex: 1; accent-color: var(--accent); }
-.readout { font: 11.5px var(--mono); color: var(--muted); white-space: nowrap; min-width: 270px; text-align: right; }
+.readout { font: 11.5px var(--mono); color: var(--muted); white-space: nowrap; min-width: 200px; text-align: right; }
 
 .events { flex: 1; min-height: 140px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .events-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px 0; }
@@ -147,3 +152,16 @@ tr.selected td { background: rgba(255, 138, 61, 0.14); color: var(--ink); }
 .h2-actions .linkbtn { margin-left: 0; }
 .overlays { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
 .overlays .check { margin: 3px 0; font-size: 12px; white-space: nowrap; }
+
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px; }
+.seg.two { grid-template-columns: 1fr 1fr; }
+.seg button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 4px 6px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); font-weight: 500; font-size: 12px; }
+.seg button em { font: 10.5px var(--mono); font-style: normal; color: var(--dim); }
+.seg button[aria-checked="true"] { color: var(--ink); border-color: var(--signal); background: rgba(63, 224, 204, 0.08); }
+.seg button[aria-checked="true"] em { color: var(--signal); }
+.seg .shape { display: block; border: 1.5px solid currentColor; border-radius: 2px; margin-bottom: 2px; }
+.seg .s169 { width: 24px; height: 13.5px; }
+.seg .s916 { width: 13.5px; height: 24px; }
+.seg .s11 { width: 18px; height: 18px; }
+.frame-guide.safe::before, .frame-guide.safe::after { background: repeating-linear-gradient(135deg, rgba(255, 138, 61, 0.22) 0 6px, rgba(6, 8, 11, 0.3) 6px 12px); }
+#format-state .warn { color: var(--accent); }

@@ -34,7 +34,9 @@ export function basemapMismatch(meta, model) {
   const s = model.settings;
   if (!meta) return "No basemap metadata.";
   if (!s.frame) return "The replay has no locked map frame.";
-  if (meta.width !== s.width || meta.height !== s.height) return `Basemap is ${meta.width}×${meta.height}, video is ${s.width}×${s.height}.`;
+  // meta.width/height are the design viewport (CSS px); the PNG has pixelRatio times as many pixels.
+  const pw = Math.round(meta.width * (meta.pixelRatio ?? 1)), ph = Math.round(meta.height * (meta.pixelRatio ?? 1));
+  if (pw !== s.width || ph !== s.height) return `Basemap is ${pw}×${ph}, video is ${s.width}×${s.height}. Prepare the map again for this format and quality.`;
   // Both cameras come from the same frame through cameraOf(); allow only float noise.
   const a = meta.camera, b = model.camera;
   if (Math.abs(a.zoom - b.zoom) > 1e-9 || Math.abs(a.lon - b.lon) > 1e-9 || Math.abs(a.lat - b.lat) > 1e-9)

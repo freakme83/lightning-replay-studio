@@ -321,7 +321,7 @@ test("16. layers work for any location: Istanbul and a southern-hemisphere fixtu
       assert.ok(Math.abs(pixel(b, ...RIGHT)[1] - 128) <= 3, `${name} land at 50 %`);
       assert.notEqual(def.meta.id, noWater.meta.id);
       // Strikes land inside the frame regardless of hemisphere.
-      const m = buildReplay(ds, { frame: f });
+      const m = buildReplay(ds, { quality: "draft", frame: f });
       for (const e of m.events) assert.ok(e.x >= 0 && e.x <= W && e.y >= 0 && e.y <= H, `${name} ${e.id}`);
     }
     assert.ok(places[1][1].events.every((e) => e.lat < 0 && e.lon < 0));
@@ -359,9 +359,9 @@ test("17. lat/lon grid: off by default, validated, drawn by the shared renderer,
     return log;
   };
   const frame = fitFrame(sample.events, W, H);
-  const off = buildReplay(sample, { frame }, { mapImage: { image: {}, attribution: "x" } });
-  const on = buildReplay(sample, { frame, showGrid: true, gridOpacity: 1 }, { mapImage: { image: {}, attribution: "x" } });
-  const dim = buildReplay(sample, { frame, showGrid: true, gridOpacity: 0.25 }, { mapImage: { image: {}, attribution: "x" } });
+  const off = buildReplay(sample, { quality: "draft", frame }, { mapImage: { image: {}, attribution: "x" } });
+  const on = buildReplay(sample, { quality: "draft", frame, showGrid: true, gridOpacity: 1 }, { mapImage: { image: {}, attribution: "x" } });
+  const dim = buildReplay(sample, { quality: "draft", frame, showGrid: true, gridOpacity: 0.25 }, { mapImage: { image: {}, attribution: "x" } });
   assert.equal(record(off, 3).labels.length, 0, "no degree labels when off");
   const a = record(on, 3), b = record(dim, 3);
   assert.ok(a.labels.length >= 4 && a.labels.some((l) => /°E$/.test(l.s)) && a.labels.some((l) => /°N$/.test(l.s)));
