@@ -127,9 +127,9 @@ checkbox and an opacity slider, plus **Reset to defaults**:
 | Group | Default | What it controls |
 | --- | --- | --- |
 | Major roads | on · 100 % | Motorways and main roads |
-| Minor roads | on · 35 % (subdued) | Streets, tracks, paths |
+| Minor roads | on · 60 % | Streets, tracks, paths. The map data only has them from zoom 12 (street level); the panel says so when your frame is wider |
 | Place names | on · 100 % | Cities, towns, districts, regions |
-| Boundaries | on · 60 % (subtle) | Country, province and state borders |
+| Boundaries | on · 60 % (subtle) | Country borders and province/state lines (solid; includes region-shared province borders, e.g. in Türkiye) |
 | Water | on · 100 % | Seas, lakes, rivers |
 | Land cover & parks | on · 100 % | Forests, parks, built-up areas (the dark background always stays) |
 

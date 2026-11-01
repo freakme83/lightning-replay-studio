@@ -29,6 +29,7 @@ const state = {
   bakingKey: null, // layer settings of the bake in flight
   mapLayers: defaultLayers(), // geographic layers behind the replay (roads, labels, …)
   layerTimer: null,
+  cameraZoom: 0, // output-frame zoom while composing
   lockToken: 0, // bumped by every bake and by unlocking; stale bake results are dropped
   composer: null,
   selected: null,
@@ -334,7 +335,13 @@ function scheduleRebake() {
   }, 450);
 }
 
+/** Output-frame zoom of the current framing (the locked frame, or the composer's camera). */
+const currentZoom = () => (state.mode === "locked" ? state.model?.camera?.zoom : state.cameraZoom);
+
 function updateLayersState() {
+  const zoom = currentZoom();
+  const low = LAYER_GROUPS.filter((g) => g.minZoom && state.mapLayers[g.id].visible && state.mapLayers[g.id].opacity > 0 && state.composer?.layerGroups[g.id] !== 0 && zoom > 0 && zoom < g.minZoom);
+  $("layers-hint").textContent = low.length ? `${low.map((g) => g.label).join(", ")}: map data only exists from zoom ${Math.max(...low.map((g) => g.minZoom))} (street level); this frame is zoom ${zoom.toFixed(1)}, so nothing shows.` : "";
   const el = $("layers-state");
   if (state.composer && !state.composer.online()) {
     el.innerHTML = `<span class="bad">Offline outline map — layer controls need the online map.</span>`;
@@ -604,9 +611,11 @@ createComposer({
   height: H,
   basemap: state.geo.basemap,
   layers: state.mapLayers,
-  onChange: (frame) => {
+  onChange: (frame, camera) => {
     if (state.mode !== "compose") return;
     state.frame = frame;
+    state.cameraZoom = camera.zoom;
+    updateLayersState();
     showFrameEdges(frame);
   },
   onStatus: ({ message }) => setMapState(`<span class="bad">${esc(message)}</span>`),
@@ -618,6 +627,7 @@ createComposer({
     if (state.frame) composer.showFrame(state.frame);
     if (state.model) composer.setStrikes(state.model.events);
     composer.setInteractive(state.mode === "compose");
+    state.cameraZoom = composer.camera().zoom;
     syncLayerControls();
     updateFrameUi();
   })

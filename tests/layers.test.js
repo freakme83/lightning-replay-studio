@@ -33,7 +33,8 @@ test("12. layer defaults, validation and reset", () => {
   const d = defaultLayers();
   assert.deepEqual(Object.keys(d), ["roadsMajor", "roadsMinor", "labels", "boundaries", "water", "land"]);
   assert.equal(d.roadsMajor.visible, true);
-  assert.ok(d.roadsMinor.opacity < 0.5, "minor roads are subdued by default");
+  assert.ok(d.roadsMinor.opacity < 1, "minor roads are subdued by default");
+  assert.equal(LAYER_GROUPS.find((g) => g.id === "roadsMinor").minZoom, 12);
   assert.ok(d.boundaries.opacity < 1, "boundaries are subtle by default");
   for (const g of LAYER_GROUPS) assert.ok(g.label && g.hint, g.id);
   // Visibility and opacity are honoured, everything else is defaulted.
@@ -74,6 +75,23 @@ test("12. layer defaults, validation and reset", () => {
   assert.deepEqual(parseLayerSpec(undefined), {});
   assert.throws(() => parseLayerSpec("streets=off"), /Unknown map layer "streets"/);
   assert.throws(() => parseLayerSpec("labels=lots"), /expected on, off or a percentage/);
+});
+
+test("13b. provider tuning: province borders are solid and include region-shared levels; minor roads are readable", () => {
+  const raw = fixture.layers.find((l) => l.id === "boundary_state");
+  assert.deepEqual(raw.filter, ["==", ["get", "admin_level"], 4], "fixture still has the stock filter");
+  assert.ok(raw.paint["line-dasharray"], "…and the stock dashes");
+  const st = byId(providerStyle, "boundary_state");
+  assert.equal(st.paint["line-dasharray"], undefined);
+  // Matches admin_level 3 and 4 (Türkiye's region/province shared ways are tagged 3), never 2 (country) or 6 (district).
+  const matches = (lvl) => lvl >= st.filter[1][2] && lvl <= st.filter[2][2]; // ["all", [">=", get, 3], ["<=", get, 4]]
+  assert.deepEqual([2, 3, 4, 5, 6].map(matches), [false, true, true, false, false]);
+  assert.ok(byId(providerStyle, "boundary_country_z5-").paint["line-dasharray"] === undefined);
+  // Minor roads are clearly lighter than the background, yet darker than the major-road casing.
+  const lum = (c) => c.match(/[\d.]+/g).slice(0, 3).map(Number).reduce((a, b) => a + b, 0) / 3;
+  const bg = lum(providerStyle.layers[0].paint["background-color"].startsWith("#") ? "rgb(7,10,16)" : providerStyle.layers[0].paint["background-color"]);
+  for (const id of ["highway_minor", "highway_path"]) assert.ok(lum(byId(providerStyle, id).paint["line-color"]) > bg + 40, id);
+  assert.ok(lum(byId(providerStyle, "highway_minor").paint["line-color"]) < lum(byId(providerStyle, "highway_major_casing").paint["line-color"]));
 });
 
 test("13. layer groups drive the provider's style layers; missing layers are tolerated", () => {

@@ -92,6 +92,17 @@ export function tuneDark(style) {
       if (!key.endsWith("-color")) continue;
       paint[key] = mapColors(paint[key], (c) => navy(c, isRoad ? 1.5 : l["source-layer"] === "boundary" ? 1.4 : 1));
     }
+    // Provider quirks that read as gaps or weak lines on a dark replay frame:
+    // - Province borders: the stock filter (admin_level == 4) drops every segment shared with a
+    //   level-3 region border (common in Türkiye), and the dashes (scaled by line width) open
+    //   persistent gaps when zoomed in. Draw levels 3–4 as a solid line.
+    // - Minor streets/paths: stock #181818 lifts to almost the background; raise them to a
+    //   readable navy-grey, still well below the major roads.
+    if (l.id === "boundary_state") {
+      l.filter = ["all", [">=", ["get", "admin_level"], 3], ["<=", ["get", "admin_level"], 4]];
+      delete paint["line-dasharray"];
+    }
+    if (l.id === "highway_minor" || l.id === "highway_path") paint["line-color"] = "rgb(54, 68, 92)";
     if (l.type === "background") paint["background-color"] = "#070a10";
     if (l.id === "water") paint["fill-color"] = "#0b1520";
     if (l.id === "waterway") paint["line-color"] = "#0d1824";

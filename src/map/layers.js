@@ -23,7 +23,8 @@ export const LAYER_GROUPS = [
     hint: "Streets, tracks and paths",
     ids: /^(highway_(minor|path)|road_(area_)?pier)/,
     types: ["line", "fill"],
-    default: { visible: true, opacity: 0.35 },
+    default: { visible: true, opacity: 0.6 },
+    minZoom: 12, // OpenMapTiles carries minor roads from zoom 12; nothing to draw below it
   },
   {
     id: "labels",
