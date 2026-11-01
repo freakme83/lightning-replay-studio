@@ -297,3 +297,56 @@ test("16. layers work for any location: Istanbul and a southern-hemisphere fixtu
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("17. lat/lon grid: off by default, validated, drawn by the shared renderer, no effect on positions or timing", async () => {
+  const { drawFrame } = await import("../src/core/draw.js");
+  const { normalizeSettings, DEFAULTS } = await import("../src/core/replay.js");
+  assert.equal(DEFAULTS.showGrid, false);
+  assert.equal(normalizeSettings({}).showGrid, false);
+  assert.equal(normalizeSettings({ showGrid: true }).showGrid, true);
+  assert.equal(normalizeSettings({ showGrid: "true" }).showGrid, true);
+  assert.equal(normalizeSettings({ showGrid: "yes" }).showGrid, false);
+  assert.throws(() => normalizeSettings({ gridOpacity: 2 }), /Grid opacity must be between 0 and 1/);
+  assert.throws(() => normalizeSettings({ gridOpacity: "x" }), /Grid opacity/);
+
+  // A recording 2D context: counts degree labels and the line alphas used for the graticule.
+  const record = (model, t) => {
+    const log = { labels: [], strokeAlphas: [], state: { globalAlpha: 1 } };
+    const ctx = new Proxy({}, {
+      get: (_, k) => {
+        if (k === "measureText") return (s) => ({ width: String(s).length * 5 });
+        if (k === "createLinearGradient" || k === "createRadialGradient") return () => ({ addColorStop() {} });
+        if (k === "fillText") return (s) => { if (/°[NSEW]$/.test(s)) log.labels.push({ s, a: log.state.globalAlpha }); };
+        if (k === "stroke") return () => log.strokeAlphas.push(log.state.globalAlpha);
+        if (k in log.state) return log.state[k];
+        return () => {};
+      },
+      set: (_, k, v) => { log.state[k] = v; return true; },
+    });
+    drawFrame(ctx, model, t);
+    return log;
+  };
+  const frame = fitFrame(sample.events, W, H);
+  const off = buildReplay(sample, { frame }, { mapImage: { image: {}, attribution: "x" } });
+  const on = buildReplay(sample, { frame, showGrid: true, gridOpacity: 1 }, { mapImage: { image: {}, attribution: "x" } });
+  const dim = buildReplay(sample, { frame, showGrid: true, gridOpacity: 0.25 }, { mapImage: { image: {}, attribution: "x" } });
+  assert.equal(record(off, 3).labels.length, 0, "no degree labels when off");
+  const a = record(on, 3), b = record(dim, 3);
+  assert.ok(a.labels.length >= 4 && a.labels.some((l) => /°E$/.test(l.s)) && a.labels.some((l) => /°N$/.test(l.s)));
+  assert.equal(a.labels.length, b.labels.length, "same lines at any opacity");
+  assert.ok(Math.max(...a.labels.map((l) => l.a)) > Math.max(...b.labels.map((l) => l.a)), "opacity changes the label strength");
+  // Grid never moves a strike or changes timing.
+  assert.deepEqual(on.events.map((e) => [e.id, e.x, e.y, e.v]), off.events.map((e) => [e.id, e.x, e.y, e.v]));
+  assert.deepEqual(on.camera, off.camera);
+  // The export carries the setting: the composition embeds the normalised settings the preview used.
+  const dir = mkdtempSync(join(tmpdir(), "lr-grid-"));
+  try {
+    const { buildComposition } = await import("../src/export/composition.js");
+    buildComposition({ text: SAMPLE, filename: "s.json", settings: { frame, showGrid: true, gridOpacity: 0.7 }, outDir: join(dir, "c") });
+    const code = readFileSync(join(dir, "c", "replay-input.js"), "utf8");
+    assert.match(code, /"showGrid":true/);
+    assert.match(code, /"gridOpacity":0\.7/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -145,6 +145,13 @@ checkbox and an opacity slider, plus **Reset to defaults**:
   has none of these layers, so the panel says so.
 - **CLI.** `npm run render -- storm.csv --layers roadsMinor=off,labels=40,water=on` (`on`, `off` or a percentage).
 
+- **Roads at wide zooms.** The map data is generalised by zoom: motorways and trunk/primary roads from the
+  start, secondary from about zoom 9, tertiary from 11, minor streets from 12. A road that changes class along its
+  length can therefore look broken in a wide frame and joins up as you zoom in; that is the source data, not the styling.
+  Roads under construction and railways are not drawn.
+- **Lat / Lon grid.** Off by default, with its own opacity slider (50 % by default). It is drawn by the replay renderer
+  on top of the map (so the preview and the MP4 share it) and does not re-bake the map. CLI: `--grid --grid-opacity 0.4`.
+
 ![layers](docs/map-layers.jpg)
 
 *Ankara, İstanbul and São Paulo, default layers (left) vs. minor roads and land off, labels 50 %, water 60 %, boundaries 100 % (right).*

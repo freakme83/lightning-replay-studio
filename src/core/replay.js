@@ -11,6 +11,8 @@ export const DEFAULTS = Object.freeze({
   trailMinutes: 20, // residual marker lifetime, in dataset minutes
   markerScale: 1, // visual size multiplier for strike markers
   showHistory: true, // keep a faint dot for every earlier strike
+  showGrid: false, // latitude / longitude graticule with degree labels
+  gridOpacity: 0.5, // 0…1
   bounds: null, // {west, south, east, north} or null = fit to data (strikes fitted inside the HUD-free map area)
   frame: null, // {west, south, east, north} of the whole video frame (Map Composer); takes precedence over bounds
   timeRange: null, // {start, end} ISO strings / epoch ms, or null = first..last strike
@@ -37,6 +39,8 @@ export function normalizeSettings(settings = {}) {
   s.trailMinutes = num(s.trailMinutes, "Trail duration (min)", 0, 1440);
   s.markerScale = num(s.markerScale, "Marker size", 0.25, 4);
   s.showHistory = s.showHistory !== false && s.showHistory !== "false";
+  s.showGrid = s.showGrid === true || s.showGrid === "true";
+  s.gridOpacity = num(s.gridOpacity, "Grid opacity", 0, 1);
   for (const key of ["bounds", "frame"]) {
     if (!s[key]) continue;
     const b = { west: +s[key].west, south: +s[key].south, east: +s[key].east, north: +s[key].north };

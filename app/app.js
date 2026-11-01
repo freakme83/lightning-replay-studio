@@ -28,6 +28,7 @@ const state = {
   mapBusy: false, // a basemap bake is in flight
   bakingKey: null, // layer settings of the bake in flight
   mapLayers: defaultLayers(), // geographic layers behind the replay (roads, labels, …)
+  grid: { visible: false, opacity: 0.5 }, // lat/lon graticule: drawn by the replay renderer, not part of the map image
   layerTimer: null,
   cameraZoom: 0, // output-frame zoom while composing
   lockToken: 0, // bumped by every bake and by unlocking; stale bake results are dropped
@@ -57,6 +58,8 @@ function readSettings() {
     trailMinutes: Number($("trail").value),
     markerScale: Number($("scale").value),
     showHistory: $("history").checked,
+    showGrid: state.grid.visible,
+    gridOpacity: state.grid.opacity,
     frame: state.frame,
     timeRange: start || end ? { start: start || null, end: end || null } : null,
     fps: DEFAULTS.fps,
@@ -363,7 +366,28 @@ $("layers").addEventListener("input", (e) => {
   if (e.target.dataset.role === "visible") setLayers({ ...state.mapLayers, [id]: { ...cur, visible: e.target.checked } });
   else if (e.target.dataset.role === "opacity") setLayers({ ...state.mapLayers, [id]: { visible: Number(e.target.value) > 0 ? true : cur.visible, opacity: Number(e.target.value) / 100 } });
 });
-$("layers-reset").addEventListener("click", () => setLayers(defaultLayers()));
+$("layers-reset").addEventListener("click", () => {
+  state.grid = { visible: false, opacity: 0.5 };
+  syncGridControls();
+  setLayers(defaultLayers());
+  rebuild();
+});
+/** The graticule is drawn on the replay canvas (same renderer as the MP4): no map re-bake needed. */
+function syncGridControls() {
+  $("grid-visible").checked = state.grid.visible;
+  $("grid-opacity").value = Math.round(state.grid.opacity * 100);
+  $("grid-pct").textContent = `${Math.round(state.grid.opacity * 100)}%`;
+  $("grid-row").classList.toggle("off", !state.grid.visible);
+}
+$("grid-row").addEventListener("input", (e) => {
+  if (e.target.id === "grid-visible") state.grid.visible = e.target.checked;
+  else if (e.target.id === "grid-opacity") {
+    state.grid.opacity = Number(e.target.value) / 100;
+    if (state.grid.opacity > 0) state.grid.visible = true;
+  }
+  syncGridControls();
+  rebuild();
+});
 $("layers-state").addEventListener("click", (e) => {
   if (e.target.matches("[data-retry]")) bakeMap({ keepImage: !!state.mapImage });
 });
@@ -637,6 +661,7 @@ createComposer({
   });
 buildLayerControls();
 syncLayerControls();
+syncGridControls();
 updateLayersState();
 await loadSample();
 sizeCanvas();

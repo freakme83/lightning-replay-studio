@@ -7,6 +7,7 @@
 //          --frame west,south,east,north   exact video frame (as locked in the Map Composer)
 //          --bounds west,south,east,north  area to fit inside the HUD-free part of the frame
 //          --layers roadsMinor=off,labels=40   map layers: on | off | opacity % (see src/map/layers.js)
+//          --grid [--grid-opacity 0.5]   latitude/longitude grid (off by default)
 //          --outline   offline Natural Earth outlines instead of the online dark map
 //          --start <ISO> --end <ISO> --title <text>
 //          --width <px> --height <px> --quality draft|looks|delivery --keep (keep work dir)
@@ -33,6 +34,8 @@ const { values, positionals } = parseArgs({
     bounds: { type: "string" },
     frame: { type: "string" },
     layers: { type: "string" },
+    grid: { type: "boolean", default: false },
+    "grid-opacity": { type: "string" },
     outline: { type: "boolean", default: false },
     start: { type: "string" },
     end: { type: "string" },
@@ -57,6 +60,8 @@ if (values.scale) settings.markerScale = Number(values.scale);
 if (values.width) settings.width = Number(values.width);
 if (values.height) settings.height = Number(values.height);
 if (values.title) settings.title = values.title;
+if (values.grid) settings.showGrid = true;
+if (values["grid-opacity"]) settings.gridOpacity = Number(values["grid-opacity"]);
 let layers;
 try {
   layers = normalizeLayers(parseLayerSpec(values.layers));

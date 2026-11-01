@@ -138,3 +138,4 @@ tr.selected td { background: rgba(255, 138, 61, 0.14); color: var(--ink); }
 .layer.missing { opacity: 0.4; }
 .layer.missing .layer-name { cursor: default; }
 #layers-state { min-height: 16px; }
+.grid-row { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
