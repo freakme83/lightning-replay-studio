@@ -19,7 +19,7 @@ const MAP_DIR = join(ROOT, "src", "map");
 const USER_AGENT = "LightningReplayStudio/1.1 (+https://github.com/freakme83/lightning-replay-studio)";
 // Basemap pixels must land within this distance of the replay projection (CSS px).
 export const ALIGNMENT_TOLERANCE_PX = 0.05;
-const RENDER_VERSION = 4; // bump when the render page or tuning changes (invalidates cache)
+const RENDER_VERSION = 5; // bump when the render page or tuning changes (invalidates cache)
 
 export class MapPrepError extends Error {
   constructor(message) {

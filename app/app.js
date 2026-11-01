@@ -301,6 +301,9 @@ function buildLayerControls() {
       <label class="layer-name"><input type="checkbox" data-role="visible" /> ${esc(g.label)}</label>
       <input type="range" min="0" max="100" step="5" data-role="opacity" aria-label="${esc(g.label)} opacity" />
       <span class="pct" data-role="pct"></span>
+      ${g.textCase ? `<label class="layer-sub">Letter case
+        <select data-role="textCase" title="Original: the map style's capitals. Natural: names as written in the map data (İstanbul, Şanlıurfa).">
+          <option value="original">Original map style</option><option value="natural">Natural case</option></select></label>` : ""}
     </div>`,
   ).join("");
 }
@@ -311,11 +314,13 @@ function syncLayerControls() {
     const missing = state.composer && state.composer.layerGroups[id] === 0;
     row.querySelector('[data-role="visible"]').checked = v.visible;
     row.querySelector('[data-role="opacity"]').value = Math.round(v.opacity * 100);
+    const tc = row.querySelector('[data-role="textCase"]');
+    if (tc) tc.value = v.textCase;
     row.querySelector('[data-role="pct"]').textContent = `${Math.round(v.opacity * 100)}%`;
     row.classList.toggle("off", !v.visible);
     row.classList.toggle("missing", !!missing);
     row.title = missing ? "Not available in the current map style" : LAYER_GROUPS.find((g) => g.id === id).hint;
-    for (const input of row.querySelectorAll("input")) input.disabled = !!missing;
+    for (const input of row.querySelectorAll("input, select")) input.disabled = !!missing;
   }
 }
 
@@ -364,7 +369,8 @@ $("layers").addEventListener("input", (e) => {
   if (!row) return;
   const id = row.dataset.id, cur = state.mapLayers[id];
   if (e.target.dataset.role === "visible") setLayers({ ...state.mapLayers, [id]: { ...cur, visible: e.target.checked } });
-  else if (e.target.dataset.role === "opacity") setLayers({ ...state.mapLayers, [id]: { visible: Number(e.target.value) > 0 ? true : cur.visible, opacity: Number(e.target.value) / 100 } });
+  else if (e.target.dataset.role === "textCase") setLayers({ ...state.mapLayers, [id]: { ...cur, textCase: e.target.value } });
+  else if (e.target.dataset.role === "opacity") setLayers({ ...state.mapLayers, [id]: { ...cur, visible: Number(e.target.value) > 0 ? true : cur.visible, opacity: Number(e.target.value) / 100 } });
 });
 $("layers-reset").addEventListener("click", () => {
   state.grid = { visible: false, opacity: 0.5 };

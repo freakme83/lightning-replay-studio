@@ -40,7 +40,7 @@ test("12. layer defaults, validation and reset", () => {
   // Visibility and opacity are honoured, everything else is defaulted.
   const n = normalizeLayers({ water: { visible: false }, labels: { opacity: 0.4 }, land: { visible: false, opacity: 0.2 } });
   assert.deepEqual(n.water, { visible: false, opacity: 1 });
-  assert.deepEqual(n.labels, { visible: true, opacity: 0.4 });
+  assert.deepEqual(n.labels, { visible: true, opacity: 0.4, textCase: "original" });
   assert.deepEqual(n.land, { visible: false, opacity: 0.2 });
   assert.deepEqual(n.roadsMajor, d.roadsMajor);
   // Invalid input never throws and never leaks through.
@@ -72,6 +72,9 @@ test("12. layer defaults, validation and reset", () => {
   assert.ok(layersAreDefault(defaultLayers()));
   // CLI spec.
   assert.deepEqual(parseLayerSpec("roadsMinor=off, labels=40,water=on"), { roadsMinor: { visible: false }, labels: { visible: true, opacity: 0.4 }, water: { visible: true } });
+  assert.deepEqual(parseLayerSpec("labels=40,labelCase=natural"), { labels: { visible: true, opacity: 0.4, textCase: "natural" } });
+  assert.deepEqual(parseLayerSpec("labelCase=natural,labels=off"), { labels: { textCase: "natural", visible: false } });
+  assert.throws(() => parseLayerSpec("labelCase=lower"), /labelCase must be original or natural/);
   assert.deepEqual(parseLayerSpec(undefined), {});
   assert.throws(() => parseLayerSpec("streets=off"), /Unknown map layer "streets"/);
   assert.throws(() => parseLayerSpec("labels=lots"), /expected on, off or a percentage/);
@@ -146,6 +149,34 @@ const styleBlueGreen = () => layerStyle(cam.lon);
 const LEFT = [W * 0.2 * 2, H * 0.5 * 2], RIGHT = [W * 0.8 * 2, H * 0.5 * 2]; // device pixels (pixelRatio 2)
 const bake = (layers, extra = {}) => renderBasemap({ frame, width: W, height: H, style: styleBlueGreen(), layers, ...extra });
 const decode = (dir, name, png) => { const f = join(dir, name); writeFileSync(f, png); return decodeRgb(f); };
+
+test("18. place-name letter case: stock style uppercases via text-transform; natural case switches it off, nothing is re-cased", () => {
+  const labelLayers = providerStyle.layers.filter((l) => /^place_/.test(l.id) && l.type === "symbol");
+  assert.ok(labelLayers.length >= 10 && labelLayers.every((l) => l.layout["text-transform"] === "uppercase"), "stock labels are upper-cased by the style");
+  assert.ok(labelLayers.every((l) => JSON.stringify(l.layout["text-field"]).includes("name_en")), "text-field reads the natural-case name");
+  // Default / original keeps the style's own transform; natural drops it; text-field is never touched.
+  const orig = applyLayers(providerStyle, defaultLayers()), nat = applyLayers(providerStyle, { labels: { textCase: "natural" } });
+  for (const l of labelLayers) {
+    assert.equal(byId(orig, l.id).layout["text-transform"], "uppercase", l.id);
+    assert.equal(byId(nat, l.id).layout["text-transform"], "none", l.id);
+    assert.deepEqual(byId(nat, l.id).layout["text-field"], l.layout["text-field"], `${l.id} text-field untouched`);
+    assert.equal(byId(nat, l.id).layout["text-font"][0], l.layout["text-font"][0]);
+  }
+  // Only place labels are affected, and switching back restores the original (patches come from the base style).
+  assert.deepEqual(byId(nat, "highway_motorway_inner").layout, { ...byId(providerStyle, "highway_motorway_inner").layout, visibility: "visible" });
+  assert.deepEqual(layerPatches(providerStyle, { labels: { textCase: "original" } }), layerPatches(providerStyle, defaultLayers()));
+  // Invalid values fall back to the default; the cache identity covers the option.
+  assert.equal(normalizeLayers({ labels: { textCase: "lower" } }).labels.textCase, "original");
+  assert.equal(normalizeLayers({ labels: { textCase: "NATURAL" } }).labels.textCase, "original");
+  assert.equal(normalizeLayers({ water: { textCase: "natural" } }).water.textCase, undefined, "only labels have a case option");
+  assert.notEqual(layersKey({ labels: { textCase: "natural" } }), layersKey(defaultLayers()));
+  assert.equal(layersKey({ labels: { textCase: "original" } }), layersKey(defaultLayers()));
+  // The transform is a layout property a symbol layer needs; a style without labels is fine.
+  assert.doesNotThrow(() => applyLayers({ version: 8, layers: [{ id: "water", type: "fill" }] }, { labels: { textCase: "natural" } }));
+  // Turkish names survive: the style never rewrites text, and JS-style upper-casing is exactly what breaks dotted İ/ı.
+  for (const name of ["İstanbul", "Şanlıurfa", "Iğdır", "Çanakkale"]) assert.equal(name.normalize("NFC"), name);
+  assert.equal("Şişli".toUpperCase(), "ŞIŞLI", "locale-free upper-casing turns i into plain I (wrong in Turkish)");
+});
 
 test("14. baked basemap: layers change the pixels, the cache keys on them, the frame does not drift", { timeout: 240000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "lr-layers-"));
@@ -240,6 +271,7 @@ async function renderInteractive({ style, layers }) {
       await new Promise((r) => map.once("idle", r)); // base style fully drawn first, then toggled live
       for (const p of layerPatches(o.style, o.layers)) {
         map.setLayoutProperty(p.id, "visibility", p.visibility);
+        for (const [k, v] of Object.entries(p.layout)) map.setLayoutProperty(p.id, k, v);
         for (const [k, v] of Object.entries(p.paint)) map.setPaintProperty(p.id, k, v);
       }
       await new Promise((r) => { map.once("idle", r); map.triggerRepaint(); });

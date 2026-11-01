@@ -32,7 +32,10 @@ export const LAYER_GROUPS = [
     hint: "Cities, towns, districts, regions",
     ids: /^place_/,
     types: ["symbol"],
-    default: { visible: true, opacity: 1 },
+    default: { visible: true, opacity: 1, textCase: "original" },
+    // The stock style upper-cases every place name with `text-transform: uppercase`; the tiles
+    // carry natural-case names (İstanbul, Şanlıurfa), so "natural" just switches the transform off.
+    textCase: true,
   },
   {
     id: "boundaries",
@@ -63,6 +66,8 @@ export const LAYER_GROUPS = [
 const OPACITY_PROPS = { fill: ["fill-opacity"], line: ["line-opacity"], symbol: ["text-opacity", "icon-opacity"] };
 const GROUP_IDS = LAYER_GROUPS.map((g) => g.id);
 
+export const TEXT_CASES = ["original", "natural"];
+
 export const defaultLayers = () => Object.fromEntries(LAYER_GROUPS.map((g) => [g.id, { ...g.default }]));
 
 /**
@@ -79,6 +84,7 @@ export function normalizeLayers(input) {
     if (typeof v.visible === "boolean") out[g.id].visible = v.visible;
     const o = typeof v.opacity === "string" && v.opacity.trim() === "" ? NaN : Number(v.opacity);
     if (Number.isFinite(o)) out[g.id].opacity = Math.round(Math.min(1, Math.max(0, o)) * 100) / 100;
+    if (g.textCase && TEXT_CASES.includes(v.textCase)) out[g.id].textCase = v.textCase;
   }
   return out;
 }
@@ -86,27 +92,32 @@ export function normalizeLayers(input) {
 /** Stable identity of a (normalised) settings object; part of the basemap cache key. */
 export function layersKey(layers) {
   const n = normalizeLayers(layers);
-  return GROUP_IDS.map((id) => `${id}:${n[id].visible ? 1 : 0}@${n[id].opacity}`).join("|");
+  return GROUP_IDS.map((id) => `${id}:${n[id].visible ? 1 : 0}@${n[id].opacity}${n[id].textCase ? `/${n[id].textCase}` : ""}`).join("|");
 }
 
 export const layersAreDefault = (layers) => layersKey(layers) === layersKey(defaultLayers());
 
 /**
- * Parse a CLI spec such as "roadsMinor=off,labels=40,water=on" (percent 0–100).
+ * Parse a CLI spec such as "roadsMinor=off,labels=40,labelCase=natural,water=on" (percent 0–100).
  * @returns {object} partial settings for normalizeLayers()
  */
 export function parseLayerSpec(spec) {
   const out = {};
   for (const part of String(spec ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
     const [id, raw = ""] = part.split("=").map((s) => s.trim());
+    if (id === "labelCase") {
+      if (!TEXT_CASES.includes(raw)) throw new Error(`labelCase must be ${TEXT_CASES.join(" or ")}, got "${raw}".`);
+      out.labels = { ...out.labels, textCase: raw };
+      continue;
+    }
     if (!GROUP_IDS.includes(id)) throw new Error(`Unknown map layer "${id}". Layers: ${GROUP_IDS.join(", ")}.`);
     const v = raw.toLowerCase();
-    if (v === "off" || v === "false" || v === "0") out[id] = { visible: false };
-    else if (v === "on" || v === "true" || v === "") out[id] = { visible: true };
+    if (v === "off" || v === "false" || v === "0") out[id] = { ...out[id], visible: false };
+    else if (v === "on" || v === "true" || v === "") out[id] = { ...out[id], visible: true };
     else {
       const pct = Number(v.replace(/%$/, ""));
       if (!Number.isFinite(pct) || pct < 0 || pct > 100) throw new Error(`Layer "${id}": expected on, off or a percentage 0–100, got "${raw}".`);
-      out[id] = { visible: true, opacity: pct / 100 };
+      out[id] = { ...out[id], visible: true, opacity: pct / 100 };
     }
   }
   return out;
@@ -141,7 +152,7 @@ function scaleOpacity(base, f) {
 /**
  * Per-layer changes that realise `layers` on `style`, always computed from the style's own
  * values (so re-applying after a change never compounds).
- * @returns {{id, visibility: "visible"|"none", paint: Object<string, any>}[]}
+ * @returns {{id, visibility: "visible"|"none", paint: Object<string, any>, layout: Object<string, any>}[]}
  */
 export function layerPatches(style, layers) {
   const n = normalizeLayers(layers);
@@ -152,7 +163,10 @@ export function layerPatches(style, layers) {
     const { visible, opacity } = n[g.id];
     const paint = {};
     for (const prop of OPACITY_PROPS[l.type] ?? []) paint[prop] = scaleOpacity(l.paint?.[prop], opacity);
-    patches.push({ id: l.id, visibility: visible && opacity > 0 ? "visible" : "none", paint });
+    // Other layout properties: label letter case (the stock style forces uppercase).
+    const layout = {};
+    if (g.textCase && l.type === "symbol") layout["text-transform"] = n[g.id].textCase === "natural" ? "none" : (l.layout?.["text-transform"] ?? "none");
+    patches.push({ id: l.id, visibility: visible && opacity > 0 ? "visible" : "none", paint, layout });
   }
   return patches;
 }
@@ -163,7 +177,7 @@ export function applyLayers(style, layers) {
   const byId = new Map(out.layers.map((l) => [l.id, l]));
   for (const p of layerPatches(style, layers)) {
     const l = byId.get(p.id);
-    l.layout = { ...l.layout, visibility: p.visibility };
+    l.layout = { ...l.layout, ...p.layout, visibility: p.visibility };
     l.paint = { ...l.paint, ...p.paint };
   }
   return out;

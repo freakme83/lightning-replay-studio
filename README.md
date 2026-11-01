@@ -145,6 +145,11 @@ checkbox and an opacity slider, plus **Reset to defaults**:
   has none of these layers, so the panel says so.
 - **CLI.** `npm run render -- storm.csv --layers roadsMinor=off,labels=40,water=on` (`on`, `off` or a percentage).
 
+- **Place-name letter case.** *Original map style* (default) keeps the style's CAPITALS. *Natural case* shows names as written
+  in the map data (İstanbul, Şanlıurfa). The tiles already hold natural-case names and the style only upper-cases them with
+  `text-transform`, so natural case simply switches that off: no text is ever re-cased by the studio, and Turkish
+  İ/ı/Ş/Ğ stay intact (the stock upper-casing even turns "Başakşehir" into "BAŞAKŞEHIR" with a plain I). A name the
+  source itself stores in capitals stays in capitals. CLI: `--layers labelCase=natural`.
 - **Roads at wide zooms.** The map data is generalised by zoom: motorways and trunk/primary roads from the
   start, secondary from about zoom 9, tertiary from 11, minor streets from 12. A road that changes class along its
   length can therefore look broken in a wide frame and joins up as you zoom in; that is the source data, not the styling.

@@ -67,6 +67,7 @@ export async function createComposer({ container, guide, width, height, basemap,
     for (const p of layerPatches(style, layers)) {
       if (!map.getLayer(p.id)) continue;
       map.setLayoutProperty(p.id, "visibility", p.visibility);
+      for (const [prop, value] of Object.entries(p.layout)) map.setLayoutProperty(p.id, prop, value);
       for (const [prop, value] of Object.entries(p.paint)) map.setPaintProperty(p.id, prop, value);
     }
   };
