@@ -93,3 +93,51 @@ test("6d. exported MP4 shows exactly the selected map layers", { timeout: 300000
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("6e. exported MP4: clean frame with all overlays off, mixed overlays, credits kept with the file", { timeout: 300000 }, async () => {
+  const { renderBasemap } = await import("../src/map/render-basemap.js");
+  const { layerStyle, decodeRgb, pixel } = await import("./helpers.js");
+  const { frameProjection, cameraOf } = await import("../src/core/projection.js");
+  const { noOverlays, defaultOverlays, attributionLines } = await import("../src/core/overlays.js");
+  const dir = mkdtempSync(join(tmpdir(), "lr-overlayrender-"));
+  try {
+    const text = JSON.stringify([
+      { id: "a", timestamp: "2026-11-01T14:00:00+03:00", lat: 39.9, lon: 32.8, type: "IC" },
+      { id: "b", timestamp: "2026-11-01T14:30:00+03:00", lat: 39.95, lon: 32.9, type: "IC" },
+    ]);
+    const frame = frameProjection({ west: 32.2, south: 39.55, east: 33.5, north: 40.3 }, 960, 540).extentOf({ x: 0, y: 0, w: 960, h: 540 });
+    const cam = cameraOf(frameProjection(frame, 960, 540), 960, 540);
+    // Left half of the map is solid blue "water", so any HUD band or text over it is easy to see.
+    const mapImage = await renderBasemap({ frame, width: 960, height: 540, style: layerStyle(cam.lon), layers: { land: { visible: false }, boundaries: { visible: false } } });
+    const lastFrame = async (name, overlays) => {
+      const { model } = buildComposition({ text, filename: "o.json", settings: { duration: 2, frame, overlays }, outDir: join(dir, name), mapImage });
+      const out = join(dir, `${name}.mp4`);
+      await renderComposition({ dir: join(dir, name), output: out, fps: 24, quality: "draft" });
+      assert.deepEqual(checkVideo(probeVideo(out), model.settings), []);
+      execFileSync("ffmpeg", ["-v", "error", "-y", "-sseof", "-0.1", "-i", out, "-frames:v", "1", join(dir, `${name}.png`)]);
+      return { img: decodeRgb(join(dir, `${name}.png`)), out };
+    };
+    const isBlue = (p) => p[2] > 200 && p[0] < 40 && p[1] < 40;
+    // Probe points inside the top band (title / clock area) and the bottom band (counter area), over the blue half.
+    const top = [[60, 20], [200, 40], [120, 60]], bottom = [[60, 480], [120, 500], [60, 515]];
+    const clean = await lastFrame("clean", noOverlays());
+    for (const [x, y] of [...top, ...bottom]) assert.ok(isBlue(pixel(clean.img, x, y)), `clean frame shows the bare map at ${x},${y}: ${pixel(clean.img, x, y)}`);
+    const full = await lastFrame("full", defaultOverlays());
+    assert.ok(top.every(([x, y]) => !isBlue(pixel(full.img, x, y))) && bottom.every(([x, y]) => !isBlue(pixel(full.img, x, y))), "default overlays darken both bands");
+    // Mixed: top overlays off, bottom ones on.
+    const mixed = await lastFrame("mixed", { ...noOverlays(), counter: true, activity: true });
+    assert.ok(top.every(([x, y]) => isBlue(pixel(mixed.img, x, y))), "top band absent");
+    assert.ok(bottom.every(([x, y]) => !isBlue(pixel(mixed.img, x, y))), "bottom band present");
+    // Credits travel with the file when they are not in the frame.
+    const { tagCredits } = await import("../src/export/render.js");
+    const credits = attributionLines({ mapAttribution: mapImage.meta.attribution, meta: {} }).join("\n");
+    const before = probeVideo(clean.out);
+    tagCredits(clean.out, credits);
+    const after = probeVideo(clean.out);
+    assert.deepEqual([after.frames, after.width, after.height, after.codec], [before.frames, before.width, before.height, before.codec]);
+    assert.match(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format_tags=comment", "-of", "csv=p=0", clean.out]).toString(), /OpenFreeMap/);
+    assert.match(readFileSync(clean.out.replace(/\.mp4$/, ".credits.txt"), "utf8"), /OpenStreetMap/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

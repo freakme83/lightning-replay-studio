@@ -161,6 +161,34 @@ checkbox and an opacity slider, plus **Reset to defaults**:
 
 *Ankara, İstanbul and São Paulo, default layers (left) vs. minor roads and land off, labels 50 %, water 60 %, boundaries 100 % (right).*
 
+## Choose the video overlays
+
+Everything informational the replay draws above the map is a switch in the **Video overlays** panel. Strikes, flashes,
+rings, trails and the map itself are the animation and are never overlays. The defaults keep the classic look.
+
+| Overlay | Default | Shows |
+| --- | --- | --- |
+| Title | on | "LIGHTNING REPLAY", the dataset title and the storm summary line |
+| Clock / timestamp | on | Local time zone, time and date |
+| Lightning counter | on | Running strike count and "last 10 min" |
+| Activity indicator | on | Strikes-over-time chart with the playhead and time ticks |
+| Scale bar | on | Distance scale |
+| Legend | on | Strike types and trail length |
+| Synthetic-data notice | on | The "SYNTHETIC DATA" badge (only drawn for datasets flagged synthetic) |
+| Attribution | on | Map and data credit line in the frame |
+
+**Hide all** gives a clean frame: only the map (with the selected map layers and, if enabled, the Lat / Lon grid) and the
+animated strikes; the dark text bands disappear too. **Reset** restores the defaults. Switches apply instantly, paused or
+playing, without rebuilding the map, re-baking the basemap or moving the replay. The export uses the settings selected at
+that moment. CLI: `--overlays none`, `--overlays title,clock` (keep only those), default `all`.
+
+**Attribution.** Switching it off only removes the credit from the picture. **Copy attribution** copies the credit lines for
+the map provider and the dataset's recorded source, and every export also writes them into the MP4's `comment` tag and a
+`<video>.credits.txt` next to it. Check the attribution and licence terms of OpenFreeMap / OpenStreetMap and of your data
+source before publishing without in-frame credit: credit outside the frame may not satisfy them.
+The synthetic-data notice is included in Hide all, so a clean video of a synthetic dataset carries no "fictional" label:
+label it yourself when you publish it.
+
 ## Preview an event
 
 - Press **Play** or hit `Space` to play. Drag the scrubber to move freely. When paused, the preview snaps to the
@@ -234,7 +262,7 @@ Focused tests (`npm run test:map` runs only the map ones):
 
 ```
 app/                 interactive preview (HTML/CSS/JS, no build step) · composer.js (Map Composer)
-src/core/            parse.js · timeline.js · projection.js · replay.js · draw.js
+src/core/            parse.js · timeline.js · projection.js · replay.js · overlays.js · draw.js
                      shared by the preview AND the exported video (copied byte-identical)
 src/map/             providers.js (map provider + dark style tuning + offline style) · layers.js (layer groups) · render-basemap.js (headless bake)
 src/export/          composition.js (writes the HyperFrames project) · render.js (render + ffprobe)
