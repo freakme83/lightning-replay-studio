@@ -91,6 +91,7 @@ All of these are in the sidebar:
 | Event time range | Optional start and end (ISO with offset). Strikes outside the range are excluded and counted. |
 | Map frame: Fit to Data | Frames every strike in the time range (plus 12 % padding) inside the HUD-free area |
 | Map frame: Lock Frame / Unlock | Confirms the 16:9 frame (prepares the map), or returns to editing it |
+| Map layers | Show or hide roads, place names, boundaries, water and land, and set each one's opacity (see below) |
 | Exact frame edges (advanced) | Type N/W/E/S; widened on one axis to keep the video's 16:9 shape |
 
 **Time mapping.** A strike at time *T* appears at
@@ -117,6 +118,48 @@ why, and **export is blocked** until you tick *Use offline outline map* — a fa
 The locked frame is stored as its geographic edges, the basemap is rendered by headless MapLibre at exactly 960 × 540
 (×2 pixel ratio) from the camera derived from that frame, and every strike and the basemap go through the same
 projection. Map credit (OpenFreeMap © OpenMapTiles · Data © OpenStreetMap contributors) is drawn in every frame.
+
+## Choose the map layers
+
+The **Map layers** panel decides which geographic features appear behind the strikes. Six groups, each with an on/off
+checkbox and an opacity slider, plus **Reset to defaults**:
+
+| Group | Default | What it controls |
+| --- | --- | --- |
+| Major roads | on · 100 % | Motorways and main roads |
+| Minor roads | on · 60 % | Streets, tracks, paths. The map data only has them from zoom 12 (street level); the panel says so when your frame is wider |
+| Place names | on · 100 % | Cities, towns, districts, regions |
+| Boundaries | on · 60 % (subtle) | Country borders and province/state lines (solid; includes region-shared province borders, e.g. in Türkiye) |
+| Water | on · 100 % | Seas, lakes, rivers |
+| Land cover & parks | on · 100 % | Forests, parks, built-up areas (the dark background always stays) |
+
+- **Live.** While you pan and zoom, changes show on the map immediately.
+- **After locking.** You can keep adjusting layers on a locked frame. Only the prepared basemap is re-baked
+  (about 2–4 s, after you stop moving a slider); the frame, the replay position and the strikes do not move. The pill
+  reads *updating layers…*, and **export is blocked** until the new map is ready. If the update fails the previous map
+  stays on screen, the sidebar shows the error and a **Retry** button.
+- **Same pixels in the MP4.** The layer settings are part of the basemap's cache key, and the export refuses a map baked
+  with other layers than the ones selected. Opacity 0 hides a group like the checkbox does.
+- **Any location.** Groups are matched to the provider's style layers by declarative id patterns
+  (`src/map/layers.js`), not to a place. A group the style does not have is greyed out. The offline outline fallback
+  has none of these layers, so the panel says so.
+- **CLI.** `npm run render -- storm.csv --layers roadsMinor=off,labels=40,water=on` (`on`, `off` or a percentage).
+
+- **Place-name letter case.** *Original map style* (default) keeps the style's CAPITALS. *Natural case* shows names as written
+  in the map data (İstanbul, Şanlıurfa). The tiles already hold natural-case names and the style only upper-cases them with
+  `text-transform`, so natural case simply switches that off: no text is ever re-cased by the studio, and Turkish
+  İ/ı/Ş/Ğ stay intact (the stock upper-casing even turns "Başakşehir" into "BAŞAKŞEHIR" with a plain I). A name the
+  source itself stores in capitals stays in capitals. CLI: `--layers labelCase=natural`.
+- **Roads at wide zooms.** The map data is generalised by zoom: motorways and trunk/primary roads from the
+  start, secondary from about zoom 9, tertiary from 11, minor streets from 12. A road that changes class along its
+  length can therefore look broken in a wide frame and joins up as you zoom in; that is the source data, not the styling.
+  Roads under construction and railways are not drawn.
+- **Lat / Lon grid.** Off by default, with its own opacity slider (50 % by default). It is drawn by the replay renderer
+  on top of the map (so the preview and the MP4 share it) and does not re-bake the map. CLI: `--grid --grid-opacity 0.4`.
+
+![layers](docs/map-layers.jpg)
+
+*Ankara, İstanbul and São Paulo, default layers (left) vs. minor roads and land off, labels 50 %, water 60 %, boundaries 100 % (right).*
 
 ## Preview an event
 
@@ -150,7 +193,7 @@ npm run render -- my-storm.csv -o exports/zoomed.mp4 --bounds 32.6,39.75,33.1,40
 The CLI prepares the same dark map (Fit to Data unless `--frame west,south,east,north` or `--bounds` is given). If the map
 cannot be prepared it stops; add `--outline` to export with the offline Natural Earth outlines instead.
 
-Other CLI options: `--fps`, `--width`/`--height` (16:9 recommended), `--title`, `--keep` (keeps the
+Other CLI options: `--layers` (map layers, see above), `--fps`, `--width`/`--height` (16:9 recommended), `--title`, `--keep` (keeps the
 generated HyperFrames project in `work/`).
 
 To build a contact sheet from any MP4:
@@ -179,6 +222,13 @@ Focused tests (`npm run test:map` runs only the map ones):
 9. A prepared basemap travels into the composition unchanged; a basemap for another frame is refused.
 10. Headless MapLibre draws known coordinates exactly where the replay does (offline style, no network).
 11. Map download failures are reported, never baked as a blank map.
+12. Layer defaults, reset, visibility, opacity clamping and invalid input.
+13. Layer groups reach the real OpenFreeMap layer ids (recorded in `tests/fixtures/`); missing layers are tolerated.
+14. A baked basemap changes with the layers, its cache key covers them, and a layer change leaves the frame,
+    alignment and strike coordinates untouched. 14b: a style without any of the groups still bakes.
+15. The interactive MapLibre map and the baked PNG render the same pixels for the same layers.
+16. Layers behave the same for İstanbul and a southern-hemisphere fixture (São Paulo, synthetic).
+6d. An MP4 rendered with non-default layers shows exactly those layers.
 
 ## Project layout
 
@@ -186,7 +236,7 @@ Focused tests (`npm run test:map` runs only the map ones):
 app/                 interactive preview (HTML/CSS/JS, no build step) · composer.js (Map Composer)
 src/core/            parse.js · timeline.js · projection.js · replay.js · draw.js
                      shared by the preview AND the exported video (copied byte-identical)
-src/map/             providers.js (map provider + dark style tuning + offline style) · render-basemap.js (headless bake)
+src/map/             providers.js (map provider + dark style tuning + offline style) · layers.js (layer groups) · render-basemap.js (headless bake)
 src/export/          composition.js (writes the HyperFrames project) · render.js (render + ffprobe)
 server.js            local server: static files + /api/basemap + /api/export
 scripts/             render.js (CLI) · generate-sample.js · contact-sheet.js · build-basemap.js

@@ -7,6 +7,7 @@ import { buildReplay, DEFAULTS, normalizeSettings, resolveTimeRange } from "/src
 import { autoBounds, frameProjection } from "/src/core/projection.js";
 import { drawFrame } from "/src/core/draw.js";
 import { createComposer } from "./composer.js";
+import { LAYER_GROUPS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
@@ -24,7 +25,13 @@ const state = {
   mode: "compose", // "compose" (editing the frame on the map) | "locked"
   mapImage: null, // { image, attribution, id, meta } once the basemap for the locked frame is baked
   mapError: null,
-  lockToken: 0,
+  mapBusy: false, // a basemap bake is in flight
+  bakingKey: null, // layer settings of the bake in flight
+  mapLayers: defaultLayers(), // geographic layers behind the replay (roads, labels, …)
+  grid: { visible: false, opacity: 0.5 }, // lat/lon graticule: drawn by the replay renderer, not part of the map image
+  layerTimer: null,
+  cameraZoom: 0, // output-frame zoom while composing
+  lockToken: 0, // bumped by every bake and by unlocking; stale bake results are dropped
   composer: null,
   selected: null,
   lastRowNow: -1,
@@ -51,6 +58,8 @@ function readSettings() {
     trailMinutes: Number($("trail").value),
     markerScale: Number($("scale").value),
     showHistory: $("history").checked,
+    showGrid: state.grid.visible,
+    gridOpacity: state.grid.opacity,
     frame: state.frame,
     timeRange: start || end ? { start: start || null, end: end || null } : null,
     fps: DEFAULTS.fps,
@@ -168,35 +177,54 @@ function stageStatus(text, bad = false) {
   el.classList.toggle("bad", bad);
 }
 
+/** Is the prepared map out of date with the layer settings (or missing)? */
+const mapIsStale = () => !state.mapImage || state.mapImage.layersKey !== layersKey(state.mapLayers);
+
 function updateFrameUi() {
   const locked = state.mode === "locked";
   const pill = $("frame-mode");
   const failed = locked && !state.mapImage && state.mapError;
-  pill.textContent = !locked ? "editing" : state.mapImage ? "locked" : failed ? "map failed" : "preparing…";
-  pill.className = `pill ${!locked ? "editing" : failed ? "failed" : "locked"}`;
+  const layersFailed = locked && state.mapImage && state.mapError;
+  const updating = locked && (state.mapBusy || (state.mapImage && mapIsStale() && !state.mapError));
+  pill.textContent = !locked ? "editing" : failed ? "map failed" : layersFailed ? "layers not applied" : updating ? (state.mapImage ? "updating layers…" : "preparing…") : "locked";
+  pill.className = `pill ${!locked ? "editing" : failed || layersFailed ? "failed" : "locked"}`;
   $("lock").textContent = locked ? "Unlock / Edit Frame" : "Lock Frame";
   $("lock").classList.toggle("secondary", locked);
   $("frame-guide").hidden = locked;
+  const wasHidden = canvas.hidden;
   canvas.hidden = !locked;
-  if (locked) sizeCanvas(); // the canvas had no layout size while hidden
+  if (locked && wasHidden) sizeCanvas(); // the canvas had no layout size while hidden
   $("frame-help").textContent = locked
     ? "Frame locked: the preview below is exactly what the MP4 will show."
     : "Drag to pan, scroll or +/− to zoom. The bright rectangle is the 16:9 video frame; hatched bands sit under the HUD.";
-  $("outline-row").hidden = !failed && !(state.composer && !state.composer.online());
+  $("outline-row").hidden = !failed && !layersFailed && !(state.composer && !state.composer.online());
   for (const id of ["play", "prev", "next", "scrub"]) $(id).disabled = !locked;
   updateExportButton();
+  updateLayersState();
+}
+
+/** The map an export would use right now, or null when none is ready. */
+function exportMap() {
+  if (state.mode !== "locked" || state.mapBusy) return null;
+  if (state.mapImage && !mapIsStale()) return { basemapId: state.mapImage.id, layers: state.mapLayers };
+  return $("use-outline").checked ? { fallback: "outline" } : null;
 }
 
 function updateExportButton() {
-  const ready = state.mode === "locked" && (state.mapImage || $("use-outline").checked);
+  const ready = !!exportMap();
   $("export").disabled = !state.dataset || !ready;
-  $("export").title = ready ? "" : state.mode !== "locked" ? "Lock the frame first" : "Map not prepared — tick the offline outline option to export anyway";
+  $("export").title = ready ? ""
+    : state.mode !== "locked" ? "Lock the frame first"
+    : state.mapBusy || (state.mapImage && !state.mapError) ? "Waiting for the map layers to finish updating"
+    : "Map not prepared — tick the offline outline option to export anyway";
 }
 
 function enterCompose(frame) {
   pause();
   state.mode = "compose";
   state.lockToken++;
+  clearTimeout(state.layerTimer);
+  state.mapBusy = false;
   state.mapImage = null;
   state.mapError = null;
   stageStatus(null);
@@ -212,37 +240,163 @@ async function lockFrame() {
   if (state.composer) state.frame = state.composer.frame();
   state.mode = "locked";
   state.mapImage = null;
-  state.mapError = null;
   state.composer?.setInteractive(false);
-  const token = ++state.lockToken;
   rebuild();
+  await bakeMap({ keepImage: false });
+}
+
+/**
+ * Prepare the basemap PNG for the locked frame with the current layer settings.
+ * keepImage: a layer change on an already-locked frame keeps drawing the previous map (and the
+ * replay position) until the new one is ready; export stays blocked meanwhile.
+ */
+async function bakeMap({ keepImage }) {
+  clearTimeout(state.layerTimer);
+  const token = ++state.lockToken;
+  const layers = structuredClone(state.mapLayers);
+  const key = layersKey(layers);
+  state.bakingKey = key;
+  state.mapBusy = true;
+  state.mapError = null;
+  if (!keepImage) state.mapImage = null;
   updateFrameUi();
-  stageStatus("Preparing map for this frame…");
-  setMapState("Preparing map…");
+  stageStatus(keepImage ? "Updating map layers…" : "Preparing map for this frame…");
+  setMapState(keepImage ? "Updating map layers…" : "Preparing map…");
   try {
     const res = await fetch("/api/basemap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ frame: state.frame, width: W, height: H, probes: state.model.events.slice(0, 200).map((e) => [e.lon, e.lat]) }),
+      body: JSON.stringify({ frame: state.frame, width: W, height: H, layers, probes: state.model.events.slice(0, 200).map((e) => [e.lon, e.lat]) }),
     });
     const meta = await res.json();
     if (!res.ok) throw new Error(meta.error ?? `Map preparation failed (${res.status}).`);
     const image = new Image();
     image.src = meta.url;
     await image.decode();
-    if (token !== state.lockToken) return; // unlocked meanwhile
-    state.mapImage = { image, attribution: meta.attribution, id: meta.id, meta };
+    if (token !== state.lockToken) return; // unlocked, or a newer bake took over
+    state.mapImage = { image, attribution: meta.attribution, id: meta.id, meta, layersKey: key };
     stageStatus(null);
     setMapState(`<span class="ok">Map ready ✓</span> ${esc(meta.provider)} · zoom ${meta.camera.zoom.toFixed(2)} · alignment ${meta.alignment.maxErrorPx < 0.001 ? "&lt;0.001" : meta.alignment.maxErrorPx.toFixed(3)} px${meta.cached ? " · cached" : ""}`);
   } catch (e) {
     if (token !== state.lockToken) return;
     state.mapError = e.message;
-    stageStatus("Map unavailable — previewing offline outlines. Export is blocked until you choose the outline fallback.", true);
+    stageStatus(
+      state.mapImage
+        ? "Couldn't update the map layers — still showing the previous map. Export is blocked until it updates."
+        : "Map unavailable — previewing offline outlines. Export is blocked until you choose the outline fallback.",
+      true,
+    );
     setMapState(`<span class="bad">${esc(e.message)}</span>`);
   }
+  state.mapBusy = false;
+  state.bakingKey = null;
   rebuild();
   updateFrameUi();
 }
+
+// ---------- map layers ----------
+function buildLayerControls() {
+  $("layers").innerHTML = LAYER_GROUPS.map(
+    (g) => `<div class="layer" data-id="${g.id}" title="${esc(g.hint)}">
+      <label class="layer-name"><input type="checkbox" data-role="visible" /> ${esc(g.label)}</label>
+      <input type="range" min="0" max="100" step="5" data-role="opacity" aria-label="${esc(g.label)} opacity" />
+      <span class="pct" data-role="pct"></span>
+      ${g.textCase ? `<label class="layer-sub">Letter case
+        <select data-role="textCase" title="Original: the map style's capitals. Natural: names as written in the map data (İstanbul, Şanlıurfa).">
+          <option value="original">Original map style</option><option value="natural">Natural case</option></select></label>` : ""}
+    </div>`,
+  ).join("");
+}
+
+function syncLayerControls() {
+  for (const row of $("layers").children) {
+    const id = row.dataset.id, v = state.mapLayers[id];
+    const missing = state.composer && state.composer.layerGroups[id] === 0;
+    row.querySelector('[data-role="visible"]').checked = v.visible;
+    row.querySelector('[data-role="opacity"]').value = Math.round(v.opacity * 100);
+    const tc = row.querySelector('[data-role="textCase"]');
+    if (tc) tc.value = v.textCase;
+    row.querySelector('[data-role="pct"]').textContent = `${Math.round(v.opacity * 100)}%`;
+    row.classList.toggle("off", !v.visible);
+    row.classList.toggle("missing", !!missing);
+    row.title = missing ? "Not available in the current map style" : LAYER_GROUPS.find((g) => g.id === id).hint;
+    for (const input of row.querySelectorAll("input, select")) input.disabled = !!missing;
+  }
+}
+
+function setLayers(next) {
+  state.mapLayers = normalizeLayers(next);
+  syncLayerControls();
+  state.composer?.setLayers(state.mapLayers); // live in the interactive map
+  scheduleRebake();
+}
+
+/** After a layer change on a locked frame: re-bake only the map, once the controls settle. */
+function scheduleRebake() {
+  clearTimeout(state.layerTimer);
+  updateFrameUi(); // marks the prepared map stale, which blocks export straight away
+  if (state.mode !== "locked") return;
+  state.layerTimer = setTimeout(() => {
+    const key = layersKey(state.mapLayers);
+    if (state.mapBusy ? state.bakingKey === key : state.mapImage?.layersKey === key) return; // nothing changed
+    bakeMap({ keepImage: !!state.mapImage });
+  }, 450);
+}
+
+/** Output-frame zoom of the current framing (the locked frame, or the composer's camera). */
+const currentZoom = () => (state.mode === "locked" ? state.model?.camera?.zoom : state.cameraZoom);
+
+function updateLayersState() {
+  const zoom = currentZoom();
+  const low = LAYER_GROUPS.filter((g) => g.minZoom && state.mapLayers[g.id].visible && state.mapLayers[g.id].opacity > 0 && state.composer?.layerGroups[g.id] !== 0 && zoom > 0 && zoom < g.minZoom);
+  $("layers-hint").textContent = low.length ? `${low.map((g) => g.label).join(", ")}: map data only exists from zoom ${Math.max(...low.map((g) => g.minZoom))} (street level); this frame is zoom ${zoom.toFixed(1)}, so nothing shows.` : "";
+  const el = $("layers-state");
+  if (state.composer && !state.composer.online()) {
+    el.innerHTML = `<span class="bad">Offline outline map — layer controls need the online map.</span>`;
+  } else if (state.mode !== "locked") {
+    el.textContent = "Changes show live. They are baked into the video when you lock the frame.";
+  } else if (state.mapBusy || (state.mapImage && mapIsStale() && !state.mapError)) {
+    el.textContent = "Updating map…";
+  } else if (state.mapError) {
+    el.innerHTML = `<span class="bad">${esc(state.mapError)}</span> <button class="linkbtn" data-retry>Retry</button>`;
+  } else if (state.mapImage) {
+    el.innerHTML = `<span class="ok">Applied ✓</span> baked into this frame${state.mapImage.meta.cached ? " (cached)" : ""}`;
+  }
+}
+
+$("layers").addEventListener("input", (e) => {
+  const row = e.target.closest(".layer");
+  if (!row) return;
+  const id = row.dataset.id, cur = state.mapLayers[id];
+  if (e.target.dataset.role === "visible") setLayers({ ...state.mapLayers, [id]: { ...cur, visible: e.target.checked } });
+  else if (e.target.dataset.role === "textCase") setLayers({ ...state.mapLayers, [id]: { ...cur, textCase: e.target.value } });
+  else if (e.target.dataset.role === "opacity") setLayers({ ...state.mapLayers, [id]: { ...cur, visible: Number(e.target.value) > 0 ? true : cur.visible, opacity: Number(e.target.value) / 100 } });
+});
+$("layers-reset").addEventListener("click", () => {
+  state.grid = { visible: false, opacity: 0.5 };
+  syncGridControls();
+  setLayers(defaultLayers());
+  rebuild();
+});
+/** The graticule is drawn on the replay canvas (same renderer as the MP4): no map re-bake needed. */
+function syncGridControls() {
+  $("grid-visible").checked = state.grid.visible;
+  $("grid-opacity").value = Math.round(state.grid.opacity * 100);
+  $("grid-pct").textContent = `${Math.round(state.grid.opacity * 100)}%`;
+  $("grid-row").classList.toggle("off", !state.grid.visible);
+}
+$("grid-row").addEventListener("input", (e) => {
+  if (e.target.id === "grid-visible") state.grid.visible = e.target.checked;
+  else if (e.target.id === "grid-opacity") {
+    state.grid.opacity = Number(e.target.value) / 100;
+    if (state.grid.opacity > 0) state.grid.visible = true;
+  }
+  syncGridControls();
+  rebuild();
+});
+$("layers-state").addEventListener("click", (e) => {
+  if (e.target.matches("[data-retry]")) bakeMap({ keepImage: !!state.mapImage });
+});
 
 // ---------- drawing ----------
 function sizeCanvas() {
@@ -376,7 +530,7 @@ async function startExport() {
       filename: state.filename,
       settings: readSettings(),
       quality: $("quality").value,
-      map: state.mapImage ? { basemapId: state.mapImage.id } : $("use-outline").checked ? { fallback: "outline" } : null,
+      map: exportMap(),
     }),
   });
   const body = await res.json();
@@ -486,9 +640,12 @@ createComposer({
   width: W,
   height: H,
   basemap: state.geo.basemap,
-  onChange: (frame) => {
+  layers: state.mapLayers,
+  onChange: (frame, camera) => {
     if (state.mode !== "compose") return;
     state.frame = frame;
+    state.cameraZoom = camera.zoom;
+    updateLayersState();
     showFrameEdges(frame);
   },
   onStatus: ({ message }) => setMapState(`<span class="bad">${esc(message)}</span>`),
@@ -500,13 +657,19 @@ createComposer({
     if (state.frame) composer.showFrame(state.frame);
     if (state.model) composer.setStrikes(state.model.events);
     composer.setInteractive(state.mode === "compose");
+    state.cameraZoom = composer.camera().zoom;
+    syncLayerControls();
     updateFrameUi();
   })
   .catch((e) => {
     // No interactive map (e.g. WebGL unavailable): frames come from Fit to Data / exact edges.
     setMapState(`<span class="bad">Interactive map unavailable: ${esc(e.message)}</span>`);
   });
+buildLayerControls();
+syncLayerControls();
+syncGridControls();
+updateLayersState();
 await loadSample();
 sizeCanvas();
 // Exposed for automated checks in the browser.
-window.__studio = { state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame };
+window.__studio = { state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame, setLayers, bakeMap };

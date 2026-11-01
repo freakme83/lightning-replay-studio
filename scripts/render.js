@@ -6,6 +6,8 @@
 // Options: --duration <s> --fps <n> --trail <storm minutes> --scale <marker size>
 //          --frame west,south,east,north   exact video frame (as locked in the Map Composer)
 //          --bounds west,south,east,north  area to fit inside the HUD-free part of the frame
+//          --layers roadsMinor=off,labels=40   map layers: on | off | opacity % (see src/map/layers.js)
+//          --grid [--grid-opacity 0.5]   latitude/longitude grid (off by default)
 //          --outline   offline Natural Earth outlines instead of the online dark map
 //          --start <ISO> --end <ISO> --title <text>
 //          --width <px> --height <px> --quality draft|looks|delivery --keep (keep work dir)
@@ -19,6 +21,7 @@ import { renderComposition, probeVideo, checkVideo } from "../src/export/render.
 import { parseDataset } from "../src/core/parse.js";
 import { buildReplay } from "../src/core/replay.js";
 import { renderBasemap } from "../src/map/render-basemap.js";
+import { normalizeLayers, parseLayerSpec } from "../src/map/layers.js";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -30,6 +33,9 @@ const { values, positionals } = parseArgs({
     scale: { type: "string" },
     bounds: { type: "string" },
     frame: { type: "string" },
+    layers: { type: "string" },
+    grid: { type: "boolean", default: false },
+    "grid-opacity": { type: "string" },
     outline: { type: "boolean", default: false },
     start: { type: "string" },
     end: { type: "string" },
@@ -54,6 +60,15 @@ if (values.scale) settings.markerScale = Number(values.scale);
 if (values.width) settings.width = Number(values.width);
 if (values.height) settings.height = Number(values.height);
 if (values.title) settings.title = values.title;
+if (values.grid) settings.showGrid = true;
+if (values["grid-opacity"]) settings.gridOpacity = Number(values["grid-opacity"]);
+let layers;
+try {
+  layers = normalizeLayers(parseLayerSpec(values.layers));
+} catch (e) {
+  console.error(e.message);
+  process.exit(2);
+}
 const box = (v) => {
   const [west, south, east, north] = v.split(",").map(Number);
   return { west, south, east, north };
@@ -72,7 +87,7 @@ if (!values.outline) {
     const s0 = buildReplay(parsed, settings).settings;
     process.stdout.write("Preparing map… ");
     try {
-      mapImage = await renderBasemap({ frame: s0.frame, width: s0.width, height: s0.height, cacheDir: join(ROOT, "work", "basemaps") });
+      mapImage = await renderBasemap({ frame: s0.frame, width: s0.width, height: s0.height, layers, cacheDir: join(ROOT, "work", "basemaps") });
     } catch (e) {
       console.error(`\n${e.message}\nRe-run with --outline to export with the offline Natural Earth outlines instead.`);
       process.exit(1);

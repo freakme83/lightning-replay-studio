@@ -8,11 +8,12 @@ import { createServer } from "node:http";
 import { readFile, stat, mkdir } from "node:fs/promises";
 import { readdirSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { join, extname, normalize, sep } from "node:path";
-import { buildComposition, ROOT } from "./src/export/composition.js";
+import { buildComposition, layersMismatch, ROOT } from "./src/export/composition.js";
 import { renderComposition, probeVideo, checkVideo } from "./src/export/render.js";
 import { renderBasemap, MapPrepError } from "./src/map/render-basemap.js";
 import { normalizeSettings } from "./src/core/replay.js";
 import { DEFAULT_PROVIDER, getProvider } from "./src/map/providers.js";
+import { normalizeLayers } from "./src/map/layers.js";
 
 const PORT = Number(process.env.PORT ?? 4317);
 const HOST = "127.0.0.1";
@@ -113,6 +114,9 @@ function resolveExportMap(map) {
   if (map?.basemapId) {
     const b = loadBasemap(map.basemapId);
     if (!b) throw new Error("The prepared map is no longer available. Lock the frame again to re-prepare it.");
+    // The video shows the layers baked into the PNG; refuse if the request expects different ones.
+    const problem = layersMismatch(b.meta, map.layers);
+    if (problem) throw new Error(problem);
     return b;
   }
   if (map?.fallback === "outline") return null;
@@ -174,7 +178,7 @@ const server = createServer(async (req, res) => {
       }
       try {
         const probes = Array.isArray(body.probes) ? body.probes.filter((p) => Array.isArray(p) && p.every(Number.isFinite)) : [];
-        const { meta, cached } = await renderBasemap({ frame: s.frame, width: s.width, height: s.height, provider: body.provider, probes, cacheDir: BASEMAP_DIR });
+        const { meta, cached } = await renderBasemap({ frame: s.frame, width: s.width, height: s.height, provider: body.provider, layers: normalizeLayers(body.layers), probes, cacheDir: BASEMAP_DIR });
         return json(res, 200, { ...meta, url: `/basemaps/${meta.id}.png`, cached });
       } catch (e) {
         return json(res, e instanceof MapPrepError ? 502 : 500, { error: e.message });

@@ -124,3 +124,21 @@ tr.now td { color: var(--ink); background: rgba(63, 224, 204, 0.08); }
 tr.selected td { background: rgba(255, 138, 61, 0.14); color: var(--ink); }
 .t-CG { color: var(--accent) !important; }
 .t-IC { color: var(--signal) !important; }
+
+.linkbtn { margin-left: auto; background: none; border: 0; padding: 0; color: var(--muted); font: 10.5px var(--mono); text-transform: none; letter-spacing: 0; text-decoration: underline; text-underline-offset: 2px; font-weight: 400; }
+.linkbtn:hover { color: var(--signal); }
+.layers { display: flex; flex-direction: column; gap: 6px; }
+.layer { display: grid; grid-template-columns: 124px 1fr 32px; align-items: center; gap: 8px; }
+.layer-name { display: flex; align-items: center; gap: 8px; color: var(--ink); cursor: pointer; white-space: nowrap; }
+.layer-name input { accent-color: var(--signal); margin: 0; }
+.layer input[type="range"] { width: 100%; accent-color: var(--signal); }
+.layer .pct { font: 11px var(--mono); color: var(--muted); text-align: right; }
+.layer.off .layer-name, .layer.off .pct { color: var(--dim); }
+.layer.off input[type="range"] { opacity: 0.4; }
+.layer.missing { opacity: 0.4; }
+.layer.missing .layer-name { cursor: default; }
+#layers-state { min-height: 16px; }
+.layer-sub { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11.5px; padding-left: 22px; }
+.layer-sub select { padding: 2px 6px; font-size: 11.5px; }
+.layer.off .layer-sub { opacity: 0.5; }
+.grid-row { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }

@@ -11,7 +11,7 @@ export const PALETTE = {
   land: "#0b1117",
   coast: "#22323d",
   border: "#2a3944",
-  grid: "rgba(120, 160, 180, 0.13)",
+  grid: "rgb(120, 160, 180)",
   gridLabel: "#66808e",
   ink: "#e4ebf0",
   muted: "#7b8a96",
@@ -91,11 +91,11 @@ function fmtDeg(v, pos, neg, step) {
 
 function drawGrid(ctx, m, k) {
   const { extent, proj, settings } = m;
+  if (!settings.showGrid || settings.gridOpacity <= 0) return; // off by default (Map layers panel)
   const W = settings.width, H = settings.height;
   const step = m.niceStep(Math.min(extent.east - extent.west, extent.north - extent.south) / 5, DEG_STEPS);
   ctx.save();
-  // Over a real map the graticule steps back so roads and labels stay readable.
-  if (m.mapImage) ctx.globalAlpha = 0.45;
+  const lineAlpha = 0.4 * settings.gridOpacity, labelAlpha = 0.4 + 0.6 * settings.gridOpacity;
   ctx.strokeStyle = PALETTE.grid;
   ctx.lineWidth = 1;
   ctx.fillStyle = PALETTE.gridLabel;
@@ -104,13 +104,17 @@ function drawGrid(ctx, m, k) {
   ctx.textAlign = "center";
   for (let lon = Math.ceil(extent.west / step) * step; lon <= extent.east; lon += step) {
     const [x] = proj.project(lon, extent.south);
+    ctx.globalAlpha = lineAlpha;
     ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, H); ctx.stroke();
+    ctx.globalAlpha = labelAlpha;
     if (x > 60 * k && x < W - 60 * k) ctx.fillText(fmtDeg(lon, "E", "W", step), x, labelY);
   }
   ctx.textAlign = "left";
   for (let lat = Math.ceil(extent.south / step) * step; lat <= extent.north; lat += step) {
     const [, y] = proj.project(extent.west, lat);
+    ctx.globalAlpha = lineAlpha;
     ctx.beginPath(); ctx.moveTo(0, Math.round(y) + 0.5); ctx.lineTo(W, Math.round(y) + 0.5); ctx.stroke();
+    ctx.globalAlpha = labelAlpha;
     if (y > m.proj.rect.y && y < m.proj.rect.y + m.proj.rect.h) ctx.fillText(fmtDeg(lat, "N", "S", step), 6 * k, y - 3 * k);
   }
   ctx.restore();

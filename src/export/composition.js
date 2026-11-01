@@ -9,6 +9,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDataset } from "../core/parse.js";
 import { buildReplay, filterBasemap } from "../core/replay.js";
+import { layersKey } from "../map/layers.js";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CORE_DIR = join(ROOT, "src", "core");
@@ -38,6 +39,16 @@ export function basemapMismatch(meta, model) {
   const a = meta.camera, b = model.camera;
   if (Math.abs(a.zoom - b.zoom) > 1e-9 || Math.abs(a.lon - b.lon) > 1e-9 || Math.abs(a.lat - b.lat) > 1e-9)
     return "The map frame changed after the basemap was prepared. Lock the frame again.";
+  return null;
+}
+
+/**
+ * A prepared basemap shows the layers it was baked with. Returns a problem description when
+ * the layer settings the user expects differ from them, or null when they match.
+ */
+export function layersMismatch(meta, layers) {
+  if (!meta?.layersKey) return "The prepared map does not record its layer settings. Lock the frame again.";
+  if (layers && layersKey(layers) !== meta.layersKey) return "The map layers changed after the map was prepared. Wait for the map to update, then export again.";
   return null;
 }
 

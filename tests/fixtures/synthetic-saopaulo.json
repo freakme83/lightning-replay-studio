@@ -1,0 +1,203 @@
+{
+ "meta": {
+  "name": "São Paulo — synthetic fixture",
+  "synthetic": true,
+  "description": "FICTIONAL test fixture, not real detections.",
+  "utcOffset": "-03:00",
+  "intensityNormalized": true
+ },
+ "events": [
+  {
+   "id": "sp-01",
+   "timestamp": "2026-12-14T19:00:00-03:00",
+   "lat": -23.8,
+   "lon": -46.3775,
+   "type": "IC",
+   "intensity": 0.29
+  },
+  {
+   "id": "sp-02",
+   "timestamp": "2026-12-14T19:05:00-03:00",
+   "lat": -23.6947,
+   "lon": -46.4924,
+   "type": "CG",
+   "intensity": 0.53
+  },
+  {
+   "id": "sp-03",
+   "timestamp": "2026-12-14T19:10:00-03:00",
+   "lat": -23.6353,
+   "lon": -46.4788,
+   "type": "CG",
+   "intensity": 0.76
+  },
+  {
+   "id": "sp-04",
+   "timestamp": "2026-12-14T19:15:00-03:00",
+   "lat": -23.5286,
+   "lon": -46.5193,
+   "type": "IC",
+   "intensity": 0.64
+  },
+  {
+   "id": "sp-05",
+   "timestamp": "2026-12-14T19:20:00-03:00",
+   "lat": -23.3916,
+   "lon": -46.7848,
+   "type": "CG",
+   "intensity": 0.37
+  },
+  {
+   "id": "sp-06",
+   "timestamp": "2026-12-14T19:25:00-03:00",
+   "lat": -23.446,
+   "lon": -46.5112,
+   "type": "CG",
+   "intensity": 0.05
+  },
+  {
+   "id": "sp-07",
+   "timestamp": "2026-12-14T19:30:00-03:00",
+   "lat": -23.458,
+   "lon": -46.6493,
+   "type": "IC",
+   "intensity": 0.92
+  },
+  {
+   "id": "sp-08",
+   "timestamp": "2026-12-14T19:35:00-03:00",
+   "lat": -23.3963,
+   "lon": -46.8563,
+   "type": "CG",
+   "intensity": 0.51
+  },
+  {
+   "id": "sp-09",
+   "timestamp": "2026-12-14T19:40:00-03:00",
+   "lat": -23.3384,
+   "lon": -46.5169,
+   "type": "CG",
+   "intensity": 0.64
+  },
+  {
+   "id": "sp-10",
+   "timestamp": "2026-12-14T19:45:00-03:00",
+   "lat": -23.5113,
+   "lon": -46.3828,
+   "type": "IC",
+   "intensity": 0.91
+  },
+  {
+   "id": "sp-11",
+   "timestamp": "2026-12-14T19:50:00-03:00",
+   "lat": -23.6139,
+   "lon": -46.7288,
+   "type": "CG",
+   "intensity": 0.84
+  },
+  {
+   "id": "sp-12",
+   "timestamp": "2026-12-14T19:55:00-03:00",
+   "lat": -23.6339,
+   "lon": -46.8385,
+   "type": "CG",
+   "intensity": 0.3
+  },
+  {
+   "id": "sp-13",
+   "timestamp": "2026-12-14T20:00:00-03:00",
+   "lat": -23.5858,
+   "lon": -46.7531,
+   "type": "IC",
+   "intensity": 0.94
+  },
+  {
+   "id": "sp-14",
+   "timestamp": "2026-12-14T20:05:00-03:00",
+   "lat": -23.5213,
+   "lon": -46.4924,
+   "type": "CG",
+   "intensity": 0.88
+  },
+  {
+   "id": "sp-15",
+   "timestamp": "2026-12-14T20:10:00-03:00",
+   "lat": -23.7707,
+   "lon": -46.7659,
+   "type": "CG",
+   "intensity": 0.56
+  },
+  {
+   "id": "sp-16",
+   "timestamp": "2026-12-14T20:15:00-03:00",
+   "lat": -23.5456,
+   "lon": -46.6771,
+   "type": "IC",
+   "intensity": 0.19
+  },
+  {
+   "id": "sp-17",
+   "timestamp": "2026-12-14T20:20:00-03:00",
+   "lat": -23.3455,
+   "lon": -46.8971,
+   "type": "CG",
+   "intensity": 0.37
+  },
+  {
+   "id": "sp-18",
+   "timestamp": "2026-12-14T20:25:00-03:00",
+   "lat": -23.6279,
+   "lon": -46.5313,
+   "type": "CG",
+   "intensity": 0.92
+  },
+  {
+   "id": "sp-19",
+   "timestamp": "2026-12-14T20:30:00-03:00",
+   "lat": -23.5426,
+   "lon": -46.8307,
+   "type": "IC",
+   "intensity": 0.41
+  },
+  {
+   "id": "sp-20",
+   "timestamp": "2026-12-14T20:35:00-03:00",
+   "lat": -23.6582,
+   "lon": -46.7113,
+   "type": "CG",
+   "intensity": 0.42
+  },
+  {
+   "id": "sp-21",
+   "timestamp": "2026-12-14T20:40:00-03:00",
+   "lat": -23.6337,
+   "lon": -46.611,
+   "type": "CG",
+   "intensity": 0.61
+  },
+  {
+   "id": "sp-22",
+   "timestamp": "2026-12-14T20:45:00-03:00",
+   "lat": -23.6834,
+   "lon": -46.3861,
+   "type": "IC",
+   "intensity": 0.46
+  },
+  {
+   "id": "sp-23",
+   "timestamp": "2026-12-14T20:50:00-03:00",
+   "lat": -23.3685,
+   "lon": -46.5489,
+   "type": "CG",
+   "intensity": 0.63
+  },
+  {
+   "id": "sp-24",
+   "timestamp": "2026-12-14T20:55:00-03:00",
+   "lat": -23.5419,
+   "lon": -46.627,
+   "type": "CG",
+   "intensity": 0.69
+  }
+ ]
+}

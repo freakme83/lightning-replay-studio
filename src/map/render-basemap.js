@@ -11,6 +11,7 @@ import { join, dirname, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cameraOf, frameProjection } from "../core/projection.js";
 import { DEFAULT_PROVIDER, getProvider } from "./providers.js";
+import { normalizeLayers, layersKey } from "./layers.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const MAPLIBRE_DIST = join(ROOT, "node_modules", "maplibre-gl", "dist");
@@ -18,7 +19,7 @@ const MAP_DIR = join(ROOT, "src", "map");
 const USER_AGENT = "LightningReplayStudio/1.1 (+https://github.com/freakme83/lightning-replay-studio)";
 // Basemap pixels must land within this distance of the replay projection (CSS px).
 export const ALIGNMENT_TOLERANCE_PX = 0.05;
-const RENDER_VERSION = 2; // bump when the render page or tuning changes (invalidates cache)
+const RENDER_VERSION = 5; // bump when the render page or tuning changes (invalidates cache)
 
 export class MapPrepError extends Error {
   constructor(message) {
@@ -52,8 +53,10 @@ const PAGE = `<!doctype html>
 <script type="module">
   import * as maplibregl from "/maplibre/maplibre-gl.mjs";
   import { loadProviderStyle } from "/map/providers.js";
+  import { applyLayers, availableGroups } from "/map/layers.js";
   window.renderMap = async (o) => {
-    const style = o.style ?? (await loadProviderStyle(o.provider, { styleUrl: o.styleUrl ?? undefined }));
+    const base = o.style ?? (await loadProviderStyle(o.provider, { styleUrl: o.styleUrl ?? undefined }));
+    const style = applyLayers(base, o.layers);
     const el = document.getElementById("map");
     el.style.width = o.width + "px";
     el.style.height = o.height + "px";
@@ -76,7 +79,7 @@ const PAGE = `<!doctype html>
       png: map.getCanvas().toDataURL("image/png"),
       canvas: [map.getCanvas().width, map.getCanvas().height],
       tilesLoaded: map.areTilesLoaded(),
-      errors, probes,
+      errors, probes, layerGroups: availableGroups(base),
       camera: { lon: c.lng, lat: c.lat, zoom: map.getZoom() },
     };
   };
@@ -123,20 +126,22 @@ function probePoints(proj, width, height, extra = []) {
  * @param o.provider provider id (src/map/providers.js)
  * @param o.style optional ready MapLibre style object (tests / offline use), bypasses the provider fetch
  * @param o.styleUrl optional style URL override for the provider
+ * @param o.layers map layer settings (src/map/layers.js); anything invalid falls back to defaults
  * @param o.probes extra [lon, lat] points to verify (e.g. the strikes)
  * @param o.cacheDir if set, identical requests are served from disk
  * @returns {{ png: Buffer, meta: object, cached: boolean }}
  */
 export async function renderBasemap({
   frame, width, height, provider = DEFAULT_PROVIDER, style = null, styleUrl = null,
-  pixelRatio = 2, probes = [], cacheDir = null, timeoutMs = 45000,
+  layers = null, pixelRatio = 2, probes = [], cacheDir = null, timeoutMs = 45000,
 }) {
   const p = getProvider(provider);
+  layers = normalizeLayers(layers);
   styleUrl ??= process.env.LR_MAP_STYLE_URL || null; // override, e.g. a self-hosted style or an outage drill
   const proj = frameProjection(frame, width, height);
   const camera = cameraOf(proj, width, height);
   const key = createHash("sha256")
-    .update(JSON.stringify({ RENDER_VERSION, provider, styleUrl, style, camera, width, height, pixelRatio }))
+    .update(JSON.stringify({ RENDER_VERSION, provider, styleUrl, style, layers: layersKey(layers), camera, width, height, pixelRatio }))
     .digest("hex")
     .slice(0, 20);
   if (cacheDir && existsSync(join(cacheDir, `${key}.png`)) && existsSync(join(cacheDir, `${key}.json`))) {
@@ -160,7 +165,7 @@ export async function renderBasemap({
     const pts = probePoints(proj, width, height, probes);
     let r;
     try {
-      r = await page.evaluate((o) => window.renderMap(o), { provider, style, styleUrl, camera, width, height, pixelRatio, probes: pts, timeoutMs });
+      r = await page.evaluate((o) => window.renderMap(o), { provider, style, styleUrl, layers, camera, width, height, pixelRatio, probes: pts, timeoutMs });
     } catch (e) {
       throw new MapPrepError(`Map could not be prepared: ${String(e.message).replace(/^Error: /, "").split("\n")[0]}`);
     }
@@ -182,6 +187,7 @@ export async function renderBasemap({
     const meta = {
       id: key, provider, attribution: p.attribution, frame: proj.extentOf({ x: 0, y: 0, w: width, h: height }),
       camera, width, height, pixelRatio, alignment: { maxErrorPx, probes: pts.length },
+      layers, layersKey: layersKey(layers), layerGroups: r.layerGroups,
     };
     if (cacheDir) {
       await mkdir(cacheDir, { recursive: true });

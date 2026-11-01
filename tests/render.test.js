@@ -62,3 +62,34 @@ test("6c. exported MP4: basemap features and strikes stay geographically aligned
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("6d. exported MP4 shows exactly the selected map layers", { timeout: 300000 }, async () => {
+  const { renderBasemap } = await import("../src/map/render-basemap.js");
+  const { layerStyle, decodeRgb, pixel } = await import("./helpers.js");
+  const { frameProjection, cameraOf } = await import("../src/core/projection.js");
+  const dir = mkdtempSync(join(tmpdir(), "lr-layerrender-"));
+  try {
+    const text = JSON.stringify([
+      { id: "a", timestamp: "2026-11-01T14:00:00+03:00", lat: 39.9, lon: 32.8, type: "IC" },
+      { id: "b", timestamp: "2026-11-01T14:30:00+03:00", lat: 39.95, lon: 32.9, type: "IC" },
+    ]);
+    const frame = frameProjection({ west: 32.2, south: 39.55, east: 33.5, north: 40.3 }, 960, 540).extentOf({ x: 0, y: 0, w: 960, h: 540 });
+    const cam = cameraOf(frameProjection(frame, 960, 540), 960, 540);
+    // Non-default layers: water off, parks at 50 %, boundaries hidden.
+    const layers = { water: { visible: false }, land: { opacity: 0.5 }, boundaries: { visible: false } };
+    const mapImage = await renderBasemap({ frame, width: 960, height: 540, style: layerStyle(cam.lon), layers });
+    const { model } = buildComposition({ text, filename: "layers.json", settings: { duration: 2, frame }, outDir: join(dir, "comp"), mapImage });
+    const out = join(dir, "layers.mp4");
+    await renderComposition({ dir: join(dir, "comp"), output: out, fps: 24, quality: "draft" });
+    assert.deepEqual(checkVideo(probeVideo(out), model.settings), []);
+    execFileSync("ffmpeg", ["-v", "error", "-y", "-sseof", "-0.1", "-i", out, "-frames:v", "1", join(dir, "last.png")]);
+    const img = decodeRgb(join(dir, "last.png"));
+    // Left half (sea) is the plain background, right half (park) is half-strength green; no border line.
+    const left = pixel(img, 960 * 0.2, 270), right = pixel(img, 960 * 0.8, 270), mid = pixel(img, 480, 160);
+    assert.ok(left[2] < 40, `sea hidden, got ${left}`);
+    assert.ok(right[1] > 90 && right[1] < 160, `park at ~50 %, got ${right}`);
+    assert.ok(mid[0] < 40 && mid[2] < 40, `boundary hidden, got ${mid}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
