@@ -2,6 +2,7 @@
 // Pure function of (model, t): no state carries between frames, so any frame can be
 // rendered on its own (HyperFrames seeks frame by frame; the preview scrubs freely).
 import { formatLocal } from "./parse.js";
+import { zoneVisible } from "./overlays.js";
 
 export const FONT_SANS = '"LR Inter", Inter, system-ui, sans-serif';
 export const FONT_MONO = '"LR Mono", "JetBrains Mono", ui-monospace, Menlo, monospace';
@@ -269,6 +270,7 @@ function niceMinutes(raw) {
 
 function drawStrip(ctx, m, t, k) {
   const { settings, bins, range, timeMap, displayOffsetMin: off } = m;
+  const ov = settings.overlays;
   const W = settings.width, H = settings.height;
   const x0 = 196 * k, x1 = W - 24 * k, top = H - 70 * k, base = H - 30 * k;
   const w = x1 - x0, h = base - top;
@@ -279,67 +281,71 @@ function drawStrip(ctx, m, t, k) {
   const playX = x0 + clamp01(frac) * w;
   const bw = w / bins.length;
   ctx.save();
-  // baseline
-  ctx.fillStyle = PALETTE.dim;
-  ctx.fillRect(x0, base, w, 1 * k);
-  bins.forEach((c, i) => {
-    if (!c) return;
-    const bh = Math.max(1.5 * k, (c / max) * h);
-    const bx = x0 + i * bw;
-    const past = bx + bw <= playX;
-    const partial = !past && bx < playX;
-    ctx.fillStyle = past ? `rgba(${PALETTE.signalRgb}, 0.7)` : "#1f2c35";
-    ctx.fillRect(bx + 0.5 * k, base - bh, Math.max(1, bw - 1 * k), bh);
-    if (partial) {
-      ctx.fillStyle = `rgba(${PALETTE.signalRgb}, 0.7)`;
-      ctx.fillRect(bx + 0.5 * k, base - bh, Math.max(0, playX - bx - 0.5 * k), bh);
+  if (ov.activity) {
+    // baseline
+    ctx.fillStyle = PALETTE.dim;
+    ctx.fillRect(x0, base, w, 1 * k);
+    bins.forEach((c, i) => {
+      if (!c) return;
+      const bh = Math.max(1.5 * k, (c / max) * h);
+      const bx = x0 + i * bw;
+      const past = bx + bw <= playX;
+      const partial = !past && bx < playX;
+      ctx.fillStyle = past ? `rgba(${PALETTE.signalRgb}, 0.7)` : "#1f2c35";
+      ctx.fillRect(bx + 0.5 * k, base - bh, Math.max(1, bw - 1 * k), bh);
+      if (partial) {
+        ctx.fillStyle = `rgba(${PALETTE.signalRgb}, 0.7)`;
+        ctx.fillRect(bx + 0.5 * k, base - bh, Math.max(0, playX - bx - 0.5 * k), bh);
+      }
+    });
+    // ticks
+    ctx.font = `${9.5 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.gridLabel;
+    ctx.textAlign = "center";
+    if (dataSpan > 0) {
+      const stepMin = niceMinutes(dataSpan / 60000 / 7);
+      const stepMs = stepMin * 60000;
+      // Align ticks to local wall-clock multiples of the step.
+      const offMs = off * 60000;
+      let tick = Math.ceil((range.start + offMs) / stepMs) * stepMs - offMs;
+      for (; tick <= range.end; tick += stepMs) {
+        const tx = x0 + ((tick - range.start) / dataSpan) * w;
+        ctx.fillRect(tx, base + 2 * k, 1, 4 * k);
+        const f = formatLocal(tick, off);
+        ctx.fillText(stepMin >= 1440 ? f.date.slice(5) : f.hm, tx, base + 16 * k);
+      }
     }
-  });
-  // ticks
-  ctx.font = `${9.5 * k}px ${FONT_MONO}`;
-  ctx.fillStyle = PALETTE.gridLabel;
-  ctx.textAlign = "center";
-  if (dataSpan > 0) {
-    const stepMin = niceMinutes(dataSpan / 60000 / 7);
-    const stepMs = stepMin * 60000;
-    // Align ticks to local wall-clock multiples of the step.
-    const offMs = off * 60000;
-    let tick = Math.ceil((range.start + offMs) / stepMs) * stepMs - offMs;
-    for (; tick <= range.end; tick += stepMs) {
-      const tx = x0 + ((tick - range.start) / dataSpan) * w;
-      ctx.fillRect(tx, base + 2 * k, 1, 4 * k);
-      const f = formatLocal(tick, off);
-      ctx.fillText(stepMin >= 1440 ? f.date.slice(5) : f.hm, tx, base + 16 * k);
-    }
-  }
-  // playhead
-  ctx.fillStyle = PALETTE.accent;
-  ctx.fillRect(Math.round(playX), top - 6 * k, 1.5 * k, h + 10 * k);
-  ctx.beginPath();
-  ctx.moveTo(playX - 4 * k, top - 10 * k); ctx.lineTo(playX + 4.5 * k, top - 10 * k); ctx.lineTo(playX + 0.75 * k, top - 5 * k);
-  ctx.fill();
-  ctx.fillStyle = PALETTE.dim;
-  ctx.textAlign = "left";
-  ctx.fillText(`strikes / ${Math.max(1, Math.round(m.binMs / 6000) / 10)} min`, x0, top - 6 * k);
+    // playhead
+    ctx.fillStyle = PALETTE.accent;
+    ctx.fillRect(Math.round(playX), top - 6 * k, 1.5 * k, h + 10 * k);
+    ctx.beginPath();
+    ctx.moveTo(playX - 4 * k, top - 10 * k); ctx.lineTo(playX + 4.5 * k, top - 10 * k); ctx.lineTo(playX + 0.75 * k, top - 5 * k);
+    ctx.fill();
+    ctx.fillStyle = PALETTE.dim;
+    ctx.textAlign = "left";
+    ctx.fillText(`strikes / ${Math.max(1, Math.round(m.binMs / 6000) / 10)} min`, x0, top - 6 * k);
 
+  }
   // counters
-  const count = m.countAt(t);
-  ctx.fillStyle = PALETTE.muted;
-  ctx.font = `${9 * k}px ${FONT_MONO}`;
-  ctx.fillText("STRIKES", 24 * k, top - 4 * k);
-  ctx.font = `500 ${22 * k}px ${FONT_MONO}`;
-  ctx.fillStyle = PALETTE.ink;
-  const digits = String(m.totalEvents).length;
-  const cs = String(count).padStart(digits, "0");
-  ctx.fillText(cs, 24 * k, top + 20 * k);
-  const cw = ctx.measureText(cs).width;
-  ctx.font = `${11 * k}px ${FONT_MONO}`;
-  ctx.fillStyle = PALETTE.muted;
-  ctx.fillText(` / ${m.totalEvents}`, 24 * k + cw, top + 20 * k);
-  ctx.font = `${9 * k}px ${FONT_MONO}`;
-  ctx.fillText("LAST 10 MIN", 24 * k, top + 40 * k);
-  ctx.fillStyle = PALETTE.signal;
-  ctx.fillText(String(m.recentCount(t, 600000)), 24 * k + 80 * k, top + 40 * k);
+  if (ov.counter) {
+    const count = m.countAt(t);
+    ctx.fillStyle = PALETTE.muted;
+    ctx.font = `${9 * k}px ${FONT_MONO}`;
+    ctx.fillText("STRIKES", 24 * k, top - 4 * k);
+    ctx.font = `500 ${22 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.ink;
+    const digits = String(m.totalEvents).length;
+    const cs = String(count).padStart(digits, "0");
+    ctx.fillText(cs, 24 * k, top + 20 * k);
+    const cw = ctx.measureText(cs).width;
+    ctx.font = `${11 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.muted;
+    ctx.fillText(` / ${m.totalEvents}`, 24 * k + cw, top + 20 * k);
+    ctx.font = `${9 * k}px ${FONT_MONO}`;
+    ctx.fillText("LAST 10 MIN", 24 * k, top + 40 * k);
+    ctx.fillStyle = PALETTE.signal;
+    ctx.fillText(String(m.recentCount(t, 600000)), 24 * k + 80 * k, top + 40 * k);
+  }
   ctx.restore();
 }
 
@@ -347,23 +353,26 @@ function drawHeader(ctx, m, t, k) {
   const { settings, meta, timeMap, displayOffsetMin: off } = m;
   const W = settings.width;
   const now = formatLocal(timeMap.toData(t), off);
+  const ov = settings.overlays;
   ctx.save();
   ctx.textBaseline = "alphabetic";
   // left: title block
   ctx.textAlign = "left";
-  ctx.font = `500 ${9.5 * k}px ${FONT_MONO}`;
-  ctx.fillStyle = PALETTE.signal;
-  ctx.fillText("LIGHTNING REPLAY", 24 * k, 30 * k);
-  ctx.font = `600 ${17 * k}px ${FONT_SANS}`;
-  ctx.fillStyle = PALETTE.ink;
-  ctx.fillText(settings.title || meta.name || "Lightning dataset", 24 * k, 52 * k);
-  const span = m.range.end - m.range.start;
-  const mins = Math.round(span / 60000);
-  ctx.font = `${9 * k}px ${FONT_MONO}`;
-  ctx.fillStyle = PALETTE.muted;
-  const dur = mins >= 120 ? `${(mins / 60).toFixed(mins % 60 ? 1 : 0)} h` : `${mins} min`;
-  ctx.fillText(`${m.totalEvents} strikes · ${dur} storm → ${settings.duration} s replay (×${Math.round(span / 1000 / timeMap.span)})`, 24 * k, 68 * k);
-  if (meta.synthetic) {
+  if (ov.title) {
+    ctx.font = `500 ${9.5 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.signal;
+    ctx.fillText("LIGHTNING REPLAY", 24 * k, 30 * k);
+    ctx.font = `600 ${17 * k}px ${FONT_SANS}`;
+    ctx.fillStyle = PALETTE.ink;
+    ctx.fillText(settings.title || meta.name || "Lightning dataset", 24 * k, 52 * k);
+    const span = m.range.end - m.range.start;
+    const mins = Math.round(span / 60000);
+    ctx.font = `${9 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.muted;
+    const dur = mins >= 120 ? `${(mins / 60).toFixed(mins % 60 ? 1 : 0)} h` : `${mins} min`;
+    ctx.fillText(`${m.totalEvents} strikes · ${dur} storm → ${settings.duration} s replay (×${Math.round(span / 1000 / timeMap.span)})`, 24 * k, 68 * k);
+  }
+  if (ov.syntheticNotice && meta.synthetic) {
     ctx.font = `500 ${8.5 * k}px ${FONT_MONO}`;
     const label = "SYNTHETIC DATA · FICTIONAL STORM · NOT REAL DETECTIONS";
     const tw = ctx.measureText(label).width;
@@ -374,16 +383,18 @@ function drawHeader(ctx, m, t, k) {
     ctx.fillText(label, 30 * k, 86.5 * k);
   }
   // right: clock
-  ctx.textAlign = "right";
-  ctx.font = `${9 * k}px ${FONT_MONO}`;
-  ctx.fillStyle = PALETTE.muted;
-  ctx.fillText(`LOCAL TIME · ${now.zone}`, W - 24 * k, 26 * k);
-  ctx.font = `500 ${28 * k}px ${FONT_MONO}`;
-  ctx.fillStyle = PALETTE.ink;
-  ctx.fillText(now.time, W - 24 * k, 56 * k);
-  ctx.font = `${9 * k}px ${FONT_MONO}`;
-  ctx.fillStyle = PALETTE.muted;
-  ctx.fillText(now.date, W - 24 * k, 72 * k);
+  if (ov.clock) {
+    ctx.textAlign = "right";
+    ctx.font = `${9 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.muted;
+    ctx.fillText(`LOCAL TIME · ${now.zone}`, W - 24 * k, 26 * k);
+    ctx.font = `500 ${28 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.ink;
+    ctx.fillText(now.time, W - 24 * k, 56 * k);
+    ctx.font = `${9 * k}px ${FONT_MONO}`;
+    ctx.fillStyle = PALETTE.muted;
+    ctx.fillText(now.date, W - 24 * k, 72 * k);
+  }
   ctx.restore();
 }
 
@@ -421,18 +432,24 @@ export function drawFrame(ctx, m, t, opts = {}) {
   drawGrid(ctx, m, k);
   drawPlaces(ctx, m, k);
   drawStrikes(ctx, m, t, k);
-  // HUD backing bands keep labels readable over the map.
-  const g1 = ctx.createLinearGradient(0, 0, 0, 100 * k);
-  g1.addColorStop(0, "rgba(6, 8, 11, 0.92)"); g1.addColorStop(1, "rgba(6, 8, 11, 0)");
-  ctx.fillStyle = g1; ctx.fillRect(0, 0, W, 100 * k);
-  const g2 = ctx.createLinearGradient(0, H - 92 * k, 0, H);
-  g2.addColorStop(0, "rgba(6, 8, 11, 0)"); g2.addColorStop(0.35, "rgba(6, 8, 11, 0.9)"); g2.addColorStop(1, "rgba(6, 8, 11, 0.96)");
-  ctx.fillStyle = g2; ctx.fillRect(0, H - 92 * k, W, 92 * k);
+  // Informational overlays (src/core/overlays.js). The HUD backing bands keep their text
+  // readable over the map, so each band exists only while an overlay needs it.
+  const ov = m.settings.overlays;
+  if (zoneVisible(ov, "top")) {
+    const g1 = ctx.createLinearGradient(0, 0, 0, 100 * k);
+    g1.addColorStop(0, "rgba(6, 8, 11, 0.92)"); g1.addColorStop(1, "rgba(6, 8, 11, 0)");
+    ctx.fillStyle = g1; ctx.fillRect(0, 0, W, 100 * k);
+  }
+  if (zoneVisible(ov, "bottom")) {
+    const g2 = ctx.createLinearGradient(0, H - 92 * k, 0, H);
+    g2.addColorStop(0, "rgba(6, 8, 11, 0)"); g2.addColorStop(0.35, "rgba(6, 8, 11, 0.9)"); g2.addColorStop(1, "rgba(6, 8, 11, 0.96)");
+    ctx.fillStyle = g2; ctx.fillRect(0, H - 92 * k, W, 92 * k);
+  }
   drawHeader(ctx, m, t, k);
-  drawScaleBar(ctx, m, k);
-  drawLegend(ctx, m, k);
+  if (ov.scaleBar) drawScaleBar(ctx, m, k);
+  if (ov.legend) drawLegend(ctx, m, k);
   drawStrip(ctx, m, t, k);
-  drawFooterNote(ctx, m, k);
+  if (ov.attribution) drawFooterNote(ctx, m, k);
   if (opts.highlight) {
     const e = opts.highlight;
     ctx.strokeStyle = "rgba(255,255,255,0.85)";

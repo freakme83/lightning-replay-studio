@@ -9,7 +9,8 @@ import { readFile, stat, mkdir } from "node:fs/promises";
 import { readdirSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { join, extname, normalize, sep } from "node:path";
 import { buildComposition, layersMismatch, ROOT } from "./src/export/composition.js";
-import { renderComposition, probeVideo, checkVideo } from "./src/export/render.js";
+import { renderComposition, probeVideo, checkVideo, tagCredits } from "./src/export/render.js";
+import { attributionLines } from "./src/core/overlays.js";
 import { renderBasemap, MapPrepError } from "./src/map/render-basemap.js";
 import { normalizeSettings } from "./src/core/replay.js";
 import { DEFAULT_PROVIDER, getProvider } from "./src/map/providers.js";
@@ -134,7 +135,8 @@ async function startExport({ text, filename, settings, quality, map }) {
   const outFile = join(ROOT, "exports", name);
   await mkdir(join(ROOT, "exports"), { recursive: true });
   // Validate synchronously so bad settings fail the request instead of the job.
-  const { model } = buildComposition({ text, filename, settings, outDir: workDir, mapImage });
+  const { model, dataset } = buildComposition({ text, filename, settings, outDir: workDir, mapImage });
+  const credits = attributionLines({ mapAttribution: mapImage?.meta.attribution, outline: !mapImage, meta: dataset.meta }).join("\n");
   running = job;
   job.status = "rendering";
   job.settings = model.settings;
@@ -146,6 +148,7 @@ async function startExport({ text, filename, settings, quality, map }) {
     onLog: (l) => { job.log = (job.log + l).slice(-20000); },
   })
     .then(() => {
+      tagCredits(outFile, credits);
       job.probe = probeVideo(outFile);
       job.problems = checkVideo(job.probe, model.settings);
       job.status = "done";

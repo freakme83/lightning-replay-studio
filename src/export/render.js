@@ -1,5 +1,6 @@
 // Runs the local HyperFrames renderer on a composition folder and verifies the MP4 with ffprobe.
 import { spawn, execFileSync } from "node:child_process";
+import { renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "./composition.js";
 
@@ -56,4 +57,16 @@ export function checkVideo(probe, { duration, fps, width, height }) {
   const expectedFrames = Math.round(duration * fps);
   if (Number.isFinite(probe.frames) && Math.abs(probe.frames - expectedFrames) > 1) problems.push(`frames ${probe.frames} ≠ ${expectedFrames}`);
   return problems;
+}
+
+/**
+ * Keep the source credit with the file when it is not drawn in the frame: written to the MP4's
+ * comment tag (stream copy, picture untouched) and to a `<name>.credits.txt` next to it.
+ */
+export function tagCredits(file, text) {
+  if (!text) return;
+  const tmp = file.replace(/\.mp4$/, ".tagged.mp4");
+  execFileSync("ffmpeg", ["-v", "error", "-y", "-i", file, "-c", "copy", "-movflags", "+faststart", "-metadata", `comment=${text}`, tmp]);
+  renameSync(tmp, file);
+  writeFileSync(file.replace(/\.mp4$/, ".credits.txt"), `${text}\n`);
 }

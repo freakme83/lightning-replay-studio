@@ -2,6 +2,7 @@
 import { createTimeMap } from "./timeline.js";
 import { autoBounds, cameraOf, createProjection, frameProjection, validateBounds } from "./projection.js";
 import { parseTimestamp } from "./parse.js";
+import { defaultOverlays, normalizeOverlays } from "./overlays.js";
 
 export const DEFAULTS = Object.freeze({
   duration: 20, // output video seconds
@@ -11,6 +12,7 @@ export const DEFAULTS = Object.freeze({
   trailMinutes: 20, // residual marker lifetime, in dataset minutes
   markerScale: 1, // visual size multiplier for strike markers
   showHistory: true, // keep a faint dot for every earlier strike
+  overlays: defaultOverlays(), // informational video overlays (src/core/overlays.js); all on = the classic look
   showGrid: false, // latitude / longitude graticule with degree labels
   gridOpacity: 0.5, // 0…1
   bounds: null, // {west, south, east, north} or null = fit to data (strikes fitted inside the HUD-free map area)
@@ -39,6 +41,7 @@ export function normalizeSettings(settings = {}) {
   s.trailMinutes = num(s.trailMinutes, "Trail duration (min)", 0, 1440);
   s.markerScale = num(s.markerScale, "Marker size", 0.25, 4);
   s.showHistory = s.showHistory !== false && s.showHistory !== "false";
+  s.overlays = normalizeOverlays(s.overlays);
   s.showGrid = s.showGrid === true || s.showGrid === "true";
   s.gridOpacity = num(s.gridOpacity, "Grid opacity", 0, 1);
   for (const key of ["bounds", "frame"]) {

@@ -7,6 +7,7 @@ import { buildReplay, DEFAULTS, normalizeSettings, resolveTimeRange } from "/src
 import { autoBounds, frameProjection } from "/src/core/projection.js";
 import { drawFrame } from "/src/core/draw.js";
 import { createComposer } from "./composer.js";
+import { OVERLAYS, defaultOverlays, noOverlays, normalizeOverlays, attributionLines } from "/src/core/overlays.js";
 import { LAYER_GROUPS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
 
 const $ = (id) => document.getElementById(id);
@@ -29,6 +30,7 @@ const state = {
   bakingKey: null, // layer settings of the bake in flight
   mapLayers: defaultLayers(), // geographic layers behind the replay (roads, labels, …)
   grid: { visible: false, opacity: 0.5 }, // lat/lon graticule: drawn by the replay renderer, not part of the map image
+  overlays: defaultOverlays(), // informational video overlays (title, clock, counter, …): drawn by the replay renderer
   layerTimer: null,
   cameraZoom: 0, // output-frame zoom while composing
   lockToken: 0, // bumped by every bake and by unlocking; stale bake results are dropped
@@ -58,6 +60,7 @@ function readSettings() {
     trailMinutes: Number($("trail").value),
     markerScale: Number($("scale").value),
     showHistory: $("history").checked,
+    overlays: state.overlays,
     showGrid: state.grid.visible,
     gridOpacity: state.grid.opacity,
     frame: state.frame,
@@ -372,6 +375,51 @@ $("layers").addEventListener("input", (e) => {
   else if (e.target.dataset.role === "textCase") setLayers({ ...state.mapLayers, [id]: { ...cur, textCase: e.target.value } });
   else if (e.target.dataset.role === "opacity") setLayers({ ...state.mapLayers, [id]: { ...cur, visible: Number(e.target.value) > 0 ? true : cur.visible, opacity: Number(e.target.value) / 100 } });
 });
+// ---------- video overlays ----------
+function buildOverlayControls() {
+  $("overlays").innerHTML = OVERLAYS.map(
+    (o) => `<label class="check" title="${esc(o.hint)}"><input type="checkbox" data-id="${o.id}" /> ${esc(o.label)}</label>`,
+  ).join("");
+}
+function syncOverlayControls() {
+  for (const input of $("overlays").querySelectorAll("input")) input.checked = state.overlays[input.dataset.id];
+  $("attribution-note").hidden = state.overlays.attribution;
+}
+/** Overlays only change what the replay canvas draws: no rebuild, no map re-bake, the timeline stays put. */
+function setOverlays(next) {
+  state.overlays = normalizeOverlays(next);
+  syncOverlayControls();
+  if (state.model) {
+    state.model.settings.overlays = state.overlays;
+    draw();
+  }
+}
+$("overlays").addEventListener("input", (e) => {
+  const id = e.target.dataset.id;
+  if (id) setOverlays({ ...state.overlays, [id]: e.target.checked });
+});
+$("overlays-hide").addEventListener("click", () => setOverlays(noOverlays()));
+$("overlays-reset").addEventListener("click", () => setOverlays(defaultOverlays()));
+$("copy-attribution").addEventListener("click", async () => {
+  const cfg = await fetch("/api/map-config").then((r) => r.json()).catch(() => ({}));
+  const text = attributionLines({
+    // The prepared map's own credit; before locking, the provider's, if the online map is in use.
+    mapAttribution: state.mapImage?.attribution ?? (state.composer?.online() ? cfg.attribution : null),
+    outline: !state.mapImage && $("use-outline").checked,
+    meta: state.dataset?.meta ?? {},
+  }).join("\n");
+  const btn = $("copy-attribution");
+  const label = (t) => { btn.textContent = t; setTimeout(() => (btn.textContent = "Copy attribution"), 1800); };
+  if (!text) return label("Nothing to copy yet");
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+  }
+  label("Copied ✓");
+});
+
 $("layers-reset").addEventListener("click", () => {
   state.grid = { visible: false, opacity: 0.5 };
   syncGridControls();
@@ -668,6 +716,8 @@ createComposer({
 buildLayerControls();
 syncLayerControls();
 syncGridControls();
+buildOverlayControls();
+syncOverlayControls();
 updateLayersState();
 await loadSample();
 sizeCanvas();

@@ -7,6 +7,7 @@
 //          --frame west,south,east,north   exact video frame (as locked in the Map Composer)
 //          --bounds west,south,east,north  area to fit inside the HUD-free part of the frame
 //          --layers roadsMinor=off,labels=40   map layers: on | off | opacity % (see src/map/layers.js)
+//          --overlays all|none|title,clock,…   informational overlays to keep (default all; none = clean frame)
 //          --grid [--grid-opacity 0.5]   latitude/longitude grid (off by default)
 //          --outline   offline Natural Earth outlines instead of the online dark map
 //          --start <ISO> --end <ISO> --title <text>
@@ -17,7 +18,8 @@ import { readFileSync, mkdirSync, rmSync } from "node:fs";
 import { basename, join, resolve, dirname } from "node:path";
 import { parseArgs } from "node:util";
 import { buildComposition, ROOT } from "../src/export/composition.js";
-import { renderComposition, probeVideo, checkVideo } from "../src/export/render.js";
+import { renderComposition, probeVideo, checkVideo, tagCredits } from "../src/export/render.js";
+import { attributionLines, parseOverlaySpec } from "../src/core/overlays.js";
 import { parseDataset } from "../src/core/parse.js";
 import { buildReplay } from "../src/core/replay.js";
 import { renderBasemap } from "../src/map/render-basemap.js";
@@ -34,6 +36,7 @@ const { values, positionals } = parseArgs({
     bounds: { type: "string" },
     frame: { type: "string" },
     layers: { type: "string" },
+    overlays: { type: "string" },
     grid: { type: "boolean", default: false },
     "grid-opacity": { type: "string" },
     outline: { type: "boolean", default: false },
@@ -61,6 +64,12 @@ if (values.width) settings.width = Number(values.width);
 if (values.height) settings.height = Number(values.height);
 if (values.title) settings.title = values.title;
 if (values.grid) settings.showGrid = true;
+try {
+  if (values.overlays !== undefined) settings.overlays = parseOverlaySpec(values.overlays);
+} catch (e) {
+  console.error(e.message);
+  process.exit(2);
+}
 if (values["grid-opacity"]) settings.gridOpacity = Number(values["grid-opacity"]);
 let layers;
 try {
@@ -108,6 +117,7 @@ const s = model.settings;
 console.log(`${model.totalEvents} strikes, ${s.duration} s @ ${s.fps} fps, ${s.width}×${s.height} → ${output}`);
 
 await renderComposition({ dir: workDir, output, fps: s.fps, quality: values.quality, onLog: (l) => process.stdout.write(l) });
+tagCredits(output, attributionLines({ mapAttribution: mapImage?.meta.attribution, outline: !mapImage, meta: dataset.meta }).join("\n"));
 const probe = probeVideo(output);
 const problems = checkVideo(probe, s);
 console.log(`\nffprobe: ${probe.codec} ${probe.width}×${probe.height} ${probe.fps} fps, ${probe.duration.toFixed(3)} s, ${probe.frames} frames, ${(probe.bytes / 1e6).toFixed(2)} MB`);
