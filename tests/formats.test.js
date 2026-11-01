@@ -267,6 +267,51 @@ test("28. portrait and square are laid out for their shape, landscape is the cla
   for (const a of Object.values(sizes)) assert.ok(a.fit.top + a.fit.bottom < a.Hu * 0.65 && a.bands.top + a.bands.bottom < a.Hu * 0.7);
 });
 
+test("28b. portrait backing is a light, eased scrim around the text, not a dark footer; landscape and square keep the classic bands", () => {
+  // Backing gradients as drawn: [offset, alpha] stops in output pixels, plus the halo state while the HUD draws.
+  const record = (m) => {
+    const grads = [], halos = new Set();
+    const ctx = new Proxy({}, {
+      get: (o, key) => {
+        if (key === "createLinearGradient") return (x0, y0, x1, y1) => { const g = { y0, y1, stops: [], addColorStop: (f, c) => g.stops.push([y0 + f * (y1 - y0), Number(/,\s*([\d.]+)\)$/.exec(c)[1])]) }; grads.push(g); return g; };
+        if (key === "measureText") return (s) => ({ width: String(s).length * 6 });
+        if (key === "fillText") return () => halos.add(o.shadowBlur ?? 0);
+        if (key in o) return o[key];
+        return () => ({ addColorStop() {} });
+      },
+      set: (o, key, v) => { o[key] = v; return true; },
+    });
+    drawFrame(ctx, m, 12);
+    return { grads, halos };
+  };
+  const { width: W, height: H } = outputSize("portrait", "hd");
+  const m = buildReplay(sample, { format: "portrait", frame: fitFrame(sample.events, W, H) }, { mapImage: MAP });
+  const L = m.layout, k = L.k;
+  const { grads, halos } = record(m);
+  assert.equal(grads.length, 2);
+  const [top, bottom] = grads;
+  const alphaAt = (g, y) => { const s = g.stops; for (let i = 1; i < s.length; i++) if (y <= s[i][0]) return s[i - 1][1] + ((y - s[i - 1][0]) / (s[i][0] - s[i - 1][0] || 1)) * (s[i][1] - s[i - 1][1]); return s.at(-1)[1]; };
+  // The map stays visible behind the lower cluster: a moderate tint at most, nothing like the old ≥ 0.9 footer.
+  assert.ok(Math.max(...bottom.stops.map((s) => s[1])) <= 0.55, "lower scrim peak");
+  assert.ok(Math.max(...top.stops.map((s) => s[1])) <= 0.55, "upper scrim peak");
+  // It eases out over the empty platform area instead of darkening it.
+  assert.ok(alphaAt(bottom, H - 1) <= 0.2, `bottom edge alpha ${alphaAt(bottom, H - 1)}`);
+  assert.ok(alphaAt(bottom, H - (L.safe.bottom / 2) * k) < alphaAt(bottom, H - L.safe.bottom * k), "lighter below the HUD than behind it");
+  // No visible start edge: the tint starts at zero and rises in small, smooth steps.
+  assert.equal(bottom.stops[0][1], 0);
+  assert.equal(top.stops.at(-1)[1], 0);
+  for (const g of [top, bottom]) for (let i = 1; i < g.stops.length; i++) assert.ok(Math.abs(g.stops[i][1] - g.stops[i - 1][1]) <= 0.08, "eased stops");
+  // Text keeps a local halo instead of relying on the backing.
+  assert.ok([...halos].every((b) => b > 0), "every HUD text has a halo");
+  // Landscape and square: unchanged classic bands, no halo.
+  for (const f of ["landscape", "square"]) {
+    const s = outputSize(f, "hd");
+    const r = record(buildReplay(sample, { format: f, frame: fitFrame(sample.events, s.width, s.height) }, { mapImage: MAP }));
+    assert.deepEqual(r.grads.map((g) => g.stops.map((x) => x[1])), [[0.92, 0], [0, 0.9, 0.96]], `${f} bands`);
+    assert.deepEqual([...r.halos], [0], `${f}: no halo`);
+  }
+});
+
 test("29. Hide all: a completely clean frame in every format and quality; one overlay at a time stays on its own band", () => {
   for (const f of FORMAT_IDS) for (const q of ["hd", "draft"]) {
     const { width: W, height: H } = outputSize(f, q);

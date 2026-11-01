@@ -127,7 +127,9 @@ checking a frame quickly. The sidebar always shows the exact pixel size.
   provider style and map layers.
 - **Overlay layouts** (`src/core/layout.js`, one small table per layout family): *landscape* is the classic HUD unchanged.
   *Portrait* stacks it: title and clock at the top, below the top safe area; counter and scale bar, then the legend, then a
-  full-width activity chart and the credit line at the bottom, above the bottom safe area, with larger type. *Square* uses
+  full-width activity chart and the credit line at the bottom, above the bottom safe area, with larger type. Its text sits on
+  light, eased scrims shaped around the two text clusters (peak 50 % tint, easing out over the platform areas) plus a soft
+  dark halo on every HUD mark, so the map stays visible behind and below the HUD instead of under a dark footer. *Square* uses
   compact top and bottom bands so the map stays dominant. Texts that would meet are shortened or scaled (the title shrinks
   before it is shortened), the legend shrinks to fit, and no two overlays overlap; the eight switches stay independent and
   **Hide all** leaves no gradient in any format.
@@ -315,6 +317,7 @@ Focused tests (`npm run test:map` runs only the map ones):
 26. A format change keeps the centre and the old view; strikes stay geographically exact and unstretched; Draft = Full HD / 2.
 27. Overlay layout in every format and quality: no text overlaps, all text on a HUD band, portrait safe areas, legibility (+ a stress case).
 28. The three layouts: classic landscape coordinates, stacked portrait, compact square.
+28b. Portrait backing is a light, eased scrim with a text halo (no dark footer); landscape and square keep their classic bands.
 29. Hide all: a completely clean frame in every format; each overlay stays on its own band.
 30. The basemap is baked at the output size (real MapLibre, offline style); cache identity covers size, format, layers.
 31. The composition declares the selected size.

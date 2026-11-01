@@ -360,7 +360,7 @@ function drawStrip(ctx, m, t, k) {
     ctx.fill();
     ctx.fillStyle = PALETTE.dim;
     ctx.textAlign = "left";
-    ctx.fillText(`strikes / ${Math.max(1, Math.round(m.binMs / 6000) / 10)} min`, x0, top - 6 * k);
+    ctx.fillText(`strikes / ${Math.max(1, Math.round(m.binMs / 6000) / 10)} min`, (A.captionX ?? A.x0) * k, top - (A.captionDy ?? 6) * k);
   }
   // counters
   if (ov.counter) {
@@ -459,6 +459,28 @@ function drawFooterNote(ctx, m, k) {
   ctx.restore();
 }
 
+const smoothstep = (x) => x * x * (3 - 2 * x);
+
+/**
+ * A HUD backing scrim from [y, alpha] control points (design units, top to bottom), eased between
+ * points so the tint has no visible start or end edge.
+ */
+function drawScrim(ctx, points, W, k) {
+  const y0 = points[0][0] * k, y1 = points[points.length - 1][0] * k;
+  const g = ctx.createLinearGradient(0, y0, 0, y1);
+  const STEPS = 12;
+  for (let i = 0; i < points.length - 1; i++) {
+    const [ya, aa] = points[i], [yb, ab] = points[i + 1];
+    for (let j = i ? 1 : 0; j <= STEPS; j++) {
+      const f = j / STEPS;
+      const a = aa + (ab - aa) * smoothstep(f);
+      g.addColorStop(((ya + (yb - ya) * f) * k - y0) / (y1 - y0), `rgba(6, 8, 11, ${+a.toFixed(4)})`);
+    }
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, y0, W, y1 - y0);
+}
+
 /**
  * @param ctx CanvasRenderingContext2D sized to settings.width × settings.height (logical px)
  * @param m model from buildReplay()
@@ -480,22 +502,35 @@ export function drawFrame(ctx, m, t, opts = {}) {
   // readable over the map, so each band exists only while an overlay needs it.
   const ov = m.settings.overlays;
   if (zoneVisible(ov, "top", L)) {
-    const h = L.bands.top * k;
-    const g1 = ctx.createLinearGradient(0, 0, 0, h);
-    g1.addColorStop(0, "rgba(6, 8, 11, 0.92)"); g1.addColorStop(1, "rgba(6, 8, 11, 0)");
-    ctx.fillStyle = g1; ctx.fillRect(0, 0, W, h);
+    if (L.scrims?.top) drawScrim(ctx, L.scrims.top, W, k);
+    else {
+      const h = L.bands.top * k;
+      const g1 = ctx.createLinearGradient(0, 0, 0, h);
+      g1.addColorStop(0, "rgba(6, 8, 11, 0.92)"); g1.addColorStop(1, "rgba(6, 8, 11, 0)");
+      ctx.fillStyle = g1; ctx.fillRect(0, 0, W, h);
+    }
   }
   if (zoneVisible(ov, "bottom", L)) {
-    const h = L.bands.bottom * k;
-    const g2 = ctx.createLinearGradient(0, H - h, 0, H);
-    g2.addColorStop(0, "rgba(6, 8, 11, 0)"); g2.addColorStop(0.35, "rgba(6, 8, 11, 0.9)"); g2.addColorStop(1, "rgba(6, 8, 11, 0.96)");
-    ctx.fillStyle = g2; ctx.fillRect(0, H - h, W, h);
+    if (L.scrims?.bottom) drawScrim(ctx, L.scrims.bottom, W, k);
+    else {
+      const h = L.bands.bottom * k;
+      const g2 = ctx.createLinearGradient(0, H - h, 0, H);
+      g2.addColorStop(0, "rgba(6, 8, 11, 0)"); g2.addColorStop(0.35, "rgba(6, 8, 11, 0.9)"); g2.addColorStop(1, "rgba(6, 8, 11, 0.96)");
+      ctx.fillStyle = g2; ctx.fillRect(0, H - h, W, h);
+    }
+  }
+  ctx.save();
+  if (L.halo) {
+    // Soft local shadow under every HUD mark (text, chart, rules) instead of a heavy backing band.
+    ctx.shadowColor = L.halo.color;
+    ctx.shadowBlur = L.halo.blur * k;
   }
   drawHeader(ctx, m, t, k);
   if (ov.scaleBar) drawScaleBar(ctx, m, k);
   if (ov.legend) drawLegend(ctx, m, k);
   drawStrip(ctx, m, t, k);
   if (ov.attribution) drawFooterNote(ctx, m, k);
+  ctx.restore();
   if (opts.highlight) {
     const e = opts.highlight;
     ctx.strokeStyle = "rgba(255,255,255,0.85)";
