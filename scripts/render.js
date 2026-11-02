@@ -7,6 +7,7 @@
 //          --frame west,south,east,north   exact video frame (as locked in the Map Composer)
 //          --bounds west,south,east,north  area to fit inside the HUD-free part of the frame
 //          --layers roadsMinor=off,labels=40   map layers: on | off | opacity % (see src/map/layers.js)
+//                   water appearance: --layers waterColor=blue|teal|#1e4d7b,waterBrightness=-50..50
 //          --overlays all|none|title,clock,…   informational overlays to keep (default all; none = clean frame)
 //          --layout layout.json   overlay positions / scales (src/core/hud.js), plain or keyed by format
 //          --shading off|subtle|standard|0…1   HUD backing gradients (default standard)

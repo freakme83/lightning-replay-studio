@@ -13,7 +13,7 @@ import { createLayoutStore, clampBox, moveTo, overrideOf, scaleAbout } from "/sr
 import { createComposer } from "./composer.js";
 import { createLayoutEditor } from "./layout-editor.js";
 import { OVERLAYS, defaultOverlays, noOverlays, normalizeOverlays, attributionLines, zoneVisible } from "/src/core/overlays.js";
-import { LAYER_GROUPS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
+import { LAYER_GROUPS, WATER_BRIGHTNESS, WATER_PRESETS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
@@ -394,6 +394,14 @@ function buildLayerControls() {
       ${g.textCase ? `<label class="layer-sub">Letter case
         <select data-role="textCase" title="Original: the map style's capitals. Natural: names as written in the map data (İstanbul, Şanlıurfa).">
           <option value="original">Original map style</option><option value="natural">Natural case</option></select></label>` : ""}
+      ${g.appearance ? `<div class="layer-sub water-sub"><span>Color</span>
+        <select data-role="waterMode" title="Original keeps the map provider's colours; the presets and Custom replace the colour of every water layer (sea, lakes, rivers).">
+          ${Object.entries(WATER_PRESETS).map(([id, p]) => `<option value="${id}">${esc(p.label)}</option>`).join("")}</select>
+        <input type="color" data-role="waterCustom" title="Custom water colour" aria-label="Custom water colour" /></div>
+        <div class="layer-sub water-sub"><span>Brightness</span>
+        <input type="range" min="${WATER_BRIGHTNESS.min}" max="${WATER_BRIGHTNESS.max}" step="${WATER_BRIGHTNESS.step}" data-role="waterBright" aria-label="Water brightness" title="Lighter or darker water; independent of opacity" />
+        <span class="pct" data-role="waterBrightPct"></span>
+        <button type="button" class="linkbtn" data-role="waterReset" title="Back to the provider's original water colours, full opacity">Reset</button></div>` : ""}
     </div>`,
   ).join("");
 }
@@ -406,6 +414,15 @@ function syncLayerControls() {
     row.querySelector('[data-role="opacity"]').value = Math.round(v.opacity * 100);
     const tc = row.querySelector('[data-role="textCase"]');
     if (tc) tc.value = v.textCase;
+    if (v.colorMode !== undefined) {
+      row.querySelector('[data-role="waterMode"]').value = v.colorMode;
+      const custom = row.querySelector('[data-role="waterCustom"]');
+      custom.value = v.customColor;
+      custom.hidden = v.colorMode !== "custom";
+      row.querySelector('[data-role="waterBright"]').value = v.brightness;
+      row.querySelector('[data-role="waterBrightPct"]').textContent = `${v.brightness > 0 ? "+" : ""}${v.brightness}%`;
+      row.querySelector('[data-role="waterReset"]').hidden = v.colorMode === "original" && v.brightness === 0 && v.visible && v.opacity === 1;
+    }
     row.querySelector('[data-role="pct"]').textContent = `${Math.round(v.opacity * 100)}%`;
     row.classList.toggle("off", !v.visible);
     row.classList.toggle("missing", !!missing);
@@ -460,6 +477,9 @@ $("layers").addEventListener("input", (e) => {
   const id = row.dataset.id, cur = state.mapLayers[id];
   if (e.target.dataset.role === "visible") setLayers({ ...state.mapLayers, [id]: { ...cur, visible: e.target.checked } });
   else if (e.target.dataset.role === "textCase") setLayers({ ...state.mapLayers, [id]: { ...cur, textCase: e.target.value } });
+  else if (e.target.dataset.role === "waterMode") setLayers({ ...state.mapLayers, [id]: { ...cur, colorMode: e.target.value } });
+  else if (e.target.dataset.role === "waterCustom") setLayers({ ...state.mapLayers, [id]: { ...cur, colorMode: "custom", customColor: e.target.value } });
+  else if (e.target.dataset.role === "waterBright") setLayers({ ...state.mapLayers, [id]: { ...cur, brightness: Number(e.target.value) } });
   else if (e.target.dataset.role === "opacity") setLayers({ ...state.mapLayers, [id]: { ...cur, visible: Number(e.target.value) > 0 ? true : cur.visible, opacity: Number(e.target.value) / 100 } });
 });
 // ---------- video overlays ----------
@@ -653,6 +673,10 @@ $("copy-attribution").addEventListener("click", async () => {
   label("Copied ✓");
 });
 
+// Water Reset: the provider's original appearance (colour preset, brightness, visibility and opacity).
+$("layers").addEventListener("click", (e) => {
+  if (e.target.dataset.role === "waterReset") setLayers({ ...state.mapLayers, water: { ...defaultLayers().water } });
+});
 $("layers-reset").addEventListener("click", () => {
   state.grid = { visible: false, opacity: 0.5 };
   syncGridControls();
