@@ -399,6 +399,8 @@ Focused tests (`npm run test:map` runs only the map ones):
 43. Snap targets: frame centre, quarters, margins, portrait safe areas, other overlays.
 44. Scaling about the anchor, corner resize (opposite corner fixed), frame-size limit, arrow nudges.
 45. Per-format layout store: isolation, lock, Reset selected / Reset layout, Hide all keeps positions.
+S1–S4. Playback scroll stability: strike-row following scrolls only the table container, pauses after manual table scrolling,
+    never calls `scrollIntoView`, and leaves the browser page's scroll untouched in a real browser.
 6g. An exported MP4 reproduces a custom overlay position, scale and shading, with no editor marks.
 
 ## Project layout

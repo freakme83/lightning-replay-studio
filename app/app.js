@@ -12,10 +12,14 @@ import { SHADING_PRESETS, shadingPreset } from "/src/core/hud.js";
 import { createLayoutStore, clampBox, moveTo, overrideOf, scaleAbout } from "/src/editor/layout-edit.js";
 import { createComposer } from "./composer.js";
 import { createLayoutEditor } from "./layout-editor.js";
+import { createFollowGate, scrollRowIntoContainer, watchUserScroll } from "./table-follow.js";
 import { OVERLAYS, defaultOverlays, noOverlays, normalizeOverlays, attributionLines, zoneVisible } from "/src/core/overlays.js";
 import { LAYER_GROUPS, WATER_BRIGHTNESS, WATER_PRESETS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
 
 const $ = (id) => document.getElementById(id);
+const tableWrap = $("ev-body").closest(".table-wrap");
+const followGate = createFollowGate();
+watchUserScroll(tableWrap, followGate);
 const canvas = $("canvas");
 const ctx = canvas.getContext("2d");
 
@@ -756,10 +760,11 @@ function markRows() {
     tr.className = i < count ? (state.t - m.events[i].v < 0.7 ? "now" : "past") : "future";
     if (state.selected && m.events[i].index === state.selected.index) tr.classList.add("selected");
   }
-  // Keep the most recent strike in view while playing.
+  // Keep the most recent strike in view while playing: inside the table only (never the page), and
+  // not while the user is scrolling the table themselves.
   if (state.playing && count !== state.lastRowNow && count > 0) {
     state.lastRowNow = count;
-    $("ev-body").querySelector(`tr[data-i="${count - 1}"]`)?.scrollIntoView({ block: "nearest" });
+    if (followGate.active()) scrollRowIntoContainer(tableWrap, $("ev-body").querySelector(`tr[data-i="${count - 1}"]`));
   }
 }
 
@@ -773,7 +778,7 @@ function seekToEvent(i) {
   const fps = m.settings.fps;
   state.t = m.timeMap.frameOf(e.v, fps) / fps;
   draw();
-  $("ev-body").querySelector(`tr[data-i="${i}"]`)?.scrollIntoView({ block: "nearest" });
+  scrollRowIntoContainer(tableWrap, $("ev-body").querySelector(`tr[data-i="${i}"]`));
 }
 
 function stepEvent(dir) {
