@@ -94,6 +94,7 @@ All of these are in the sidebar:
 | Map frame: Lock Frame / Unlock | Confirms the video frame (prepares the map at the output size), or returns to editing it |
 | Map layers | Show or hide roads, place names, boundaries, water and land, and set each one's opacity (see below) |
 | Exact frame edges (advanced) | Type N/W/E/S; widened on one axis to keep the selected video shape |
+| Video overlays | Show or hide each informational overlay, set the background shading, and **Edit layout** (see below) |
 
 **Time mapping.** A strike at time *T* appears at
 `leadIn + (T − start) / (end − start) × (duration − leadIn − tail)`. `leadIn` is 1.2 s and `tail` is 1.8 s; both
@@ -237,6 +238,46 @@ source before publishing without in-frame credit: credit outside the frame may n
 The synthetic-data notice is included in Hide all, so a clean video of a synthetic dataset carries no "fictional" label:
 label it yourself when you publish it.
 
+## Edit the overlay layout
+
+With the frame locked, **Edit layout** (under the preview, or in the Video overlays panel) turns the preview into a layout
+editor for the eight overlays. Playback, scrubbing and the map are unaffected, and nothing of the editor is ever drawn into
+the video: it is a layer of outlines above the canvas, while every change goes into the same layout settings the canvas
+renderer draws from in the preview and in the MP4.
+
+![Overlay Layout Editor](docs/overlay-layout-editor.jpg)
+
+*Synthetic Ankara storm, portrait Full HD: snapping to the frame centre and to the quarter lines, a locked overlay while
+another one moves, the chart scaled to 85 % on the bottom safe line with shading off, and that frame in the exported MP4.*
+
+- **Select** an overlay by clicking it (faint outlines show what is selectable; the smallest box wins where boxes overlap,
+  the selected one first), or from the inspector's list, which also reaches hidden overlays without showing them.
+- **Move** by dragging (mouse, pen or touch). The overlay keeps the point you grabbed under the pointer and stays inside the
+  frame. **Resize** by dragging a corner handle: the opposite corner stays put. **Arrow keys** nudge (Shift = 10×),
+  **Esc** cancels a drag, then clears the selection.
+- **Smart snapping** (on by default) aligns the overlay's edges or centre to the frame centre (solid turquoise guide),
+  the quarter lines, the edge margins, the portrait safe areas (orange) and the other visible overlays, one guide per axis.
+  It captures within 6 CSS px and lets go once the pointer is 10 px past it; after letting go nothing captures again for
+  another 6 px, so dragging on through a guide never sticks or jumps back. Overlay-to-overlay guides use 60 % of those
+  distances. Shift-drag, or the checkbox, turns it off.
+- **Inspector**: position of the overlay's centre (% of the frame), **Scale** 50–150 % (never larger than the frame),
+  **Lock position** (that overlay only; unrelated to Lock Frame), **Reset** (this overlay) and **Reset layout** (every
+  overlay of the current format). **Done editing** leaves the mode.
+
+Each format keeps its own layout for the session (`final layout = format preset + your overrides`): editing portrait never
+moves landscape or square, switching back restores your edits, Draft ↔ Full HD keeps them, and Hide all keeps them too.
+An override stores the overlay's anchor (its natural corner or edge, e.g. the clock's top-right) as a fraction of the frame
+plus a scale, so one layout renders at the same relative place in Draft and Full HD. Layout edits never rebuild the replay,
+re-bake the map or move the playhead, and they never affect timestamps, strike positions, counts or the projection.
+
+**Background shading** (Video overlays panel): **Standard** is each format's preset look, **Subtle** half of it, **Off** no
+backing gradients at all (text, chart, lightning and map stay); the slider sets any value between. Text keeps a soft dark
+halo whenever the shading is lighter than Standard (always in portrait). An overlay you move into the middle of the frame
+gets its own soft local backing instead of a band. Shading never touches the map image.
+
+CLI: `--layout layout.json` (an overlay layout, plain or keyed by format, e.g.
+`{"portrait": {"activity": {"x": 0.5, "y": 0.865, "scale": 0.85}}}`) and `--shading off|subtle|standard|0…1`.
+
 ## Preview an event
 
 - Press **Play** or hit `Space` to play. Drag the scrubber to move freely. When paused, the preview snaps to the
@@ -275,7 +316,8 @@ The CLI prepares the same dark map (Fit to Data unless `--frame west,south,east,
 cannot be prepared it stops; add `--outline` to export with the offline Natural Earth outlines instead.
 
 Format options: `--format landscape|portrait|square` (default landscape) and `--quality hd|draft` (default `hd` = Full HD).
-Other CLI options: `--layers` (map layers, see above), `--overlays`, `--fps`, `--encode draft|looks|delivery` (x264 preset),
+Other CLI options: `--layers` (map layers, see above), `--overlays`, `--layout`, `--shading` (overlay layout and HUD
+shading, see above), `--fps`, `--encode draft|looks|delivery` (x264 preset),
 `--width`/`--height` (an explicit size instead of `--format`/`--quality`, for advanced use), `--title`, `--keep` (keeps the
 generated HyperFrames project in `work/`).
 
@@ -323,14 +365,30 @@ Focused tests (`npm run test:map` runs only the map ones):
 31. The composition declares the selected size.
 6f. Real Full HD MP4s in all three formats: size, fps, frame count, H.264 profile, strike and basemap alignment to the pixel,
     and a clean Hide all frame.
+32. Overlay layout overrides: validation, clamping, per-format entries.
+33. Normalized placement: presets unchanged; one layout is the same relative composition in Draft and Full HD.
+34. The renderer moves and scales a whole overlay group; untouched overlays and chart values stay; the preset draws exactly as before.
+35. Layout and shading never change events, counts, projection, camera or the prepared map (no re-bake).
+36. HUD shading Off / Subtle / Standard, halo, and a clean Hide all with a custom layout.
+37. Backing follows moved overlays: bands only while an overlay sits in them, a soft local backing mid-frame.
+38. Overlay geometry is measured from the renderer, for every overlay and format, hidden ones included.
+39. Preview/export parity: the composition carries the exact layout and shading and draws the same calls.
+40. CSS preview px ↔ output px at any preview size and quality.
+41. Dragging keeps the grab offset, clamps to the frame, and lands at the same relative place in Draft and Full HD.
+42. Snapping: capture, hysteresis, release without jumps or drift, quiet zone, competing targets, snapping off.
+43. Snap targets: frame centre, quarters, margins, portrait safe areas, other overlays.
+44. Scaling about the anchor, corner resize (opposite corner fixed), frame-size limit, arrow nudges.
+45. Per-format layout store: isolation, lock, Reset selected / Reset layout, Hide all keeps positions.
+6g. An exported MP4 reproduces a custom overlay position, scale and shading, with no editor marks.
 
 ## Project layout
 
 ```
-app/                 interactive preview (HTML/CSS/JS, no build step) · composer.js (Map Composer)
-src/core/            parse.js · timeline.js · projection.js · replay.js · format.js · layout.js · overlays.js · draw.js
+app/                 interactive preview (HTML/CSS/JS, no build step) · composer.js (Map Composer) · layout-editor.js (Edit layout)
+src/core/            parse.js · timeline.js · projection.js · replay.js · format.js · layout.js · overlays.js · hud.js · draw.js
                      shared by the preview AND the exported video (copied byte-identical)
 src/map/             providers.js (map provider + dark style tuning + offline style) · layers.js (layer groups) · render-basemap.js (headless bake)
+src/editor/          layout-edit.js (layout editor geometry: coordinates, snapping, scaling, per-format store)
 src/export/          composition.js (writes the HyperFrames project) · render.js (render + ffprobe)
 server.js            local server: static files + /api/basemap + /api/export
 scripts/             render.js (CLI) · generate-sample.js · contact-sheet.js · build-basemap.js

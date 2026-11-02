@@ -7,8 +7,11 @@ import { buildReplay, DEFAULTS, normalizeSettings, resolveTimeRange } from "/src
 import { FORMATS, QUALITIES, describeSize, designViewport, outputSize } from "/src/core/format.js";
 import { layoutFor } from "/src/core/layout.js";
 import { autoBounds, containFrame } from "/src/core/projection.js";
-import { drawFrame } from "/src/core/draw.js";
+import { drawFrame, overlayGeometry } from "/src/core/draw.js";
+import { SHADING_PRESETS, shadingPreset } from "/src/core/hud.js";
+import { createLayoutStore, clampBox, moveTo, overrideOf, scaleAbout } from "/src/editor/layout-edit.js";
 import { createComposer } from "./composer.js";
+import { createLayoutEditor } from "./layout-editor.js";
 import { OVERLAYS, defaultOverlays, noOverlays, normalizeOverlays, attributionLines, zoneVisible } from "/src/core/overlays.js";
 import { LAYER_GROUPS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
 
@@ -35,6 +38,10 @@ const state = {
   mapLayers: defaultLayers(), // geographic layers behind the replay (roads, labels, …)
   grid: { visible: false, opacity: 0.5 }, // lat/lon graticule: drawn by the replay renderer, not part of the map image
   overlays: defaultOverlays(), // informational video overlays (title, clock, counter, …): drawn by the replay renderer
+  layouts: createLayoutStore(), // overlay placement per video format (preset + user overrides)
+  shading: SHADING_PRESETS.standard, // HUD backing gradient opacity 0…1
+  editing: false, // Edit Layout mode
+  snapping: true, // smart alignment while dragging overlays
   layerTimer: null,
   cameraZoom: 0, // output-frame zoom while composing
   lockToken: 0, // bumped by every bake and by unlocking; stale bake results are dropped
@@ -65,6 +72,8 @@ function readSettings() {
     markerScale: Number($("scale").value),
     showHistory: $("history").checked,
     overlays: state.overlays,
+    overlayLayout: state.layouts.get(state.format),
+    hudShading: state.shading,
     showGrid: state.grid.visible,
     gridOpacity: state.grid.opacity,
     frame: state.frame,
@@ -211,6 +220,8 @@ function updateFrameUi() {
     : `Drag to pan, scroll or +/− to zoom. The bright rectangle is the ${FORMATS[state.format].ratio} video frame; hatched bands sit under the HUD${state.format === "portrait" ? " and the platform's top/bottom interface areas" : ""}.`;
   $("outline-row").hidden = !failed && !layersFailed && !(state.composer && !state.composer.online());
   for (const id of ["play", "prev", "next", "scrub"]) $(id).disabled = !locked;
+  $("edit-layout").disabled = $("edit-layout-side").disabled = !locked || !state.model;
+  $("edit-layout").title = locked ? "Move, resize and lock overlays directly on the preview" : "Lock the frame first: overlays are edited on the locked preview";
   updateExportButton();
   updateLayersState();
 }
@@ -233,6 +244,7 @@ function updateExportButton() {
 
 function enterCompose(frame) {
   pause();
+  setEditing(false);
   state.mode = "compose";
   state.lockToken++;
   clearTimeout(state.layerTimer);
@@ -349,7 +361,7 @@ function setFormat(format) {
   updateHud();
   if (!state.dataset) return;
   if (state.frame) state.frame = containFrame(state.frame, o.width, o.height);
-  enterCompose(state.frame);
+  enterCompose(state.frame); // also leaves Edit Layout; this format's own overlay layout applies
   formatNote(wasLocked
     ? `<span class="warn">${f.label} ${f.ratio}: the prepared map no longer fits, so the frame is unlocked.</span> Same centre, the previous view is kept inside the new shape. Lock the frame to prepare the map at ${o.width} × ${o.height}.`
     : `${f.label} ${f.ratio}: same centre, the area you had in view still fits. Fit to Data re-frames the strikes for this shape.`);
@@ -467,9 +479,154 @@ function setOverlays(next) {
   updateHud();
   if (state.model) {
     state.model.settings.overlays = state.overlays;
+    if (state.editing) buildInspectorList();
     draw();
   }
 }
+// ---------- overlay layout & shading ----------
+/** Layout and shading only change what the replay canvas draws: no rebuild, no map re-bake, the timeline stays put. */
+function applyLayout() {
+  if (!state.model) return;
+  state.model.settings.overlayLayout = state.layouts.get(state.format);
+  state.model.settings.hudShading = state.shading;
+  draw();
+}
+
+function setShading(v) {
+  state.shading = Math.min(1, Math.max(0, Math.round(v * 100) / 100));
+  syncShadingControls();
+  applyLayout();
+}
+function syncShadingControls() {
+  const name = shadingPreset(state.shading);
+  for (const b of $("shading-seg").children) b.setAttribute("aria-checked", String(b.dataset.shading === name));
+  $("shading").value = Math.round(state.shading * 100);
+  $("shading-pct").textContent = name === "custom" ? `${Math.round(state.shading * 100)}%` : name === "off" ? "off" : `${Math.round(state.shading * 100)}%`;
+}
+$("shading-seg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setShading(SHADING_PRESETS[b.dataset.shading]); });
+$("shading").addEventListener("input", (e) => setShading(Number(e.target.value) / 100));
+
+/** Measured overlay boxes (output px) for the editor, from the very renderer that draws them. */
+function editorGeometry() {
+  const m = state.model;
+  if (!m || state.mode !== "locked") return null;
+  return { model: m, boxes: overlayGeometry(ctx, m, state.t), overrides: state.layouts.get(state.format) };
+}
+
+const editor = createLayoutEditor({
+  layer: $("hud-editor"),
+  canvas,
+  geometry: editorGeometry,
+  isLocked: (id) => state.layouts.isLocked(state.format, id),
+  snapping: () => state.snapping,
+  onSelect: () => syncInspector(true),
+  onChange: (id, override) => {
+    if (override !== undefined) state.layouts.replace(state.format, id, override);
+    applyLayout();
+  },
+});
+
+function setEditing(on) {
+  on = !!on && state.mode === "locked" && !!state.model;
+  if (on === state.editing) return;
+  editor.cancelDrag();
+  state.editing = on;
+  if (on) pause();
+  $("hud-editor").hidden = !on;
+  $("hud-inspector").hidden = !on;
+  $("stage-col").classList.toggle("editing", on);
+  $("edit-layout").setAttribute("aria-pressed", String(on));
+  $("edit-layout").textContent = on ? "Done" : "Edit layout";
+  if (!on) editor.select(null);
+  if (on) {
+    buildInspectorList();
+    $("hud-editor").focus({ preventScroll: true });
+  }
+  draw();
+}
+
+function buildInspectorList() {
+  const g = editorGeometry();
+  $("insp-overlay").innerHTML = `<option value="">Select an overlay…</option>` + OVERLAYS.map((o) => {
+    const avail = g?.boxes[o.id]?.base;
+    const tag = !avail ? " (not in this dataset)" : !state.overlays[o.id] ? " (hidden)" : "";
+    return `<option value="${o.id}"${avail ? "" : " disabled"}>${esc(o.label)}${tag}</option>`;
+  }).join("");
+}
+
+/** Inspector fields from the selected overlay's measured box; `force` also rewrites a focused field. */
+function syncInspector(force = false) {
+  if (!state.editing) return;
+  const id = editor.selected();
+  const g = editorGeometry()?.boxes[id];
+  const box = $("hud-inspector");
+  box.classList.toggle("no-sel", !g?.box);
+  if ($("insp-overlay").value !== (id ?? "")) $("insp-overlay").value = id ?? "";
+  const locked = id ? state.layouts.isLocked(state.format, id) : false;
+  $("insp-lock").setAttribute("aria-pressed", String(locked));
+  $("insp-lock").textContent = locked ? "Locked" : "Lock position";
+  for (const el of ["insp-x", "insp-y", "insp-scale", "insp-reset"]) $(el).disabled = !g?.box || locked;
+  $("insp-hint").textContent = !g?.box
+    ? "Click an overlay in the frame to select it. Drag to move, drag a corner to resize, arrow keys nudge (Shift = 10×)."
+    : locked ? "Locked: it stays where it is. Unlock to move or resize it."
+    : !g.visible ? "Hidden in the video. Its position is kept and can be edited here."
+    : "Drag to move · corner to resize · arrows nudge · Esc deselects";
+  if (!g?.box) return;
+  const { width: W, height: H } = state.model.settings;
+  const set = (el, v) => { if (force || document.activeElement !== $(el)) $(el).value = v; };
+  set("insp-x", (((g.box.x + g.box.w / 2) / W) * 100).toFixed(1));
+  set("insp-y", (((g.box.y + g.box.h / 2) / H) * 100).toFixed(1));
+  set("insp-scale", Math.round(g.placement.s * 100));
+  $("insp-scale-val").textContent = `${Math.round(g.placement.s * 100)}%`;
+}
+
+/** Apply an inspector edit to the selected overlay: `fn(placement, base, W, H)` returns the new placement. */
+function editSelected(fn) {
+  const id = editor.selected();
+  const g = editorGeometry()?.boxes[id];
+  if (!g?.base || state.layouts.isLocked(state.format, id)) return;
+  const { width: W, height: H } = state.model.settings;
+  const p = fn(g.placement, g.base, W, H);
+  state.layouts.replace(state.format, id, { ...state.layouts.get(state.format)[id], ...overrideOf(p, W, H) });
+  applyLayout();
+}
+const centreTo = (axis, pct) => editSelected((p, base, W, H) => {
+  const b = overlayGeometry(ctx, state.model, state.t)[editor.selected()].box;
+  const target = { ...b, [axis]: (pct / 100) * (axis === "x" ? W : H) - (axis === "x" ? b.w : b.h) / 2 };
+  return moveTo(p, base, clampBox(target, W, H));
+});
+$("insp-x").addEventListener("change", (e) => Number.isFinite(+e.target.value) && centreTo("x", +e.target.value));
+$("insp-y").addEventListener("change", (e) => Number.isFinite(+e.target.value) && centreTo("y", +e.target.value));
+// Scale about the overlay's anchor (its natural corner or edge), then kept inside the frame.
+$("insp-scale").addEventListener("input", (e) => editSelected((p, base, W, H) => scaleAbout(p, base, Number(e.target.value) / 100, [p.x, p.y], W, H)));
+$("insp-overlay").addEventListener("change", (e) => { editor.select(e.target.value || null); syncInspector(true); });
+$("insp-lock").addEventListener("click", () => {
+  const id = editor.selected();
+  if (!id) return;
+  state.layouts.set(state.format, id, { locked: !state.layouts.isLocked(state.format, id) }); // unlocking drops the flag
+  applyLayout();
+  syncInspector(true);
+});
+$("insp-reset").addEventListener("click", () => {
+  const id = editor.selected();
+  if (!id) return;
+  state.layouts.reset(state.format, id);
+  applyLayout();
+  syncInspector(true);
+});
+$("layout-reset").addEventListener("click", () => {
+  state.layouts.resetAll(state.format);
+  applyLayout();
+  syncInspector(true);
+});
+$("snap-toggle").addEventListener("change", (e) => { state.snapping = e.target.checked; });
+$("edit-done").addEventListener("click", () => setEditing(false));
+$("edit-layout").addEventListener("click", () => setEditing(!state.editing));
+$("edit-layout-side").addEventListener("click", () => {
+  setEditing(true);
+  $("hud-inspector").scrollIntoView({ block: "nearest", behavior: "smooth" });
+});
+
 $("overlays").addEventListener("input", (e) => {
   const id = e.target.dataset.id;
   if (id) setOverlays({ ...state.overlays, [id]: e.target.checked });
@@ -539,7 +696,8 @@ function draw() {
   if (!m) return;
   const dpr = canvas.width / m.settings.width;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  drawFrame(ctx, m, state.t, { highlight: state.playing ? null : state.selected });
+  drawFrame(ctx, m, state.t, { highlight: state.playing || state.editing ? null : state.selected });
+  if (state.editing) { editor.refresh(); syncInspector(); }
   const fps = m.settings.fps;
   const now = formatLocal(m.timeMap.toData(state.t), m.displayOffsetMin);
   $("readout").textContent = `${state.t.toFixed(2)} / ${m.settings.duration} s · f${Math.round(state.t * fps)} · ${now.time} ${now.zone}`;
@@ -747,7 +905,8 @@ $("ev-body").addEventListener("click", (e) => {
 $("ev-filter").addEventListener("input", () => state.model && renderTable());
 $("export").addEventListener("click", startExport);
 document.addEventListener("keydown", (e) => {
-  if (!state.model || e.target.matches("input, select, textarea")) return;
+  if (!state.model || e.target.matches?.("input, select, textarea")) return;
+  if (state.editing && editor.keydown(e)) return; // arrows nudge the selected overlay, Esc cancels / deselects
   const fps = state.model.settings.fps;
   if (e.code === "Space") { e.preventDefault(); state.playing ? pause() : play(); }
   else if (e.key === "ArrowRight") { pause(); state.t = Math.min(state.model.settings.duration, state.t + 1 / fps); draw(); }
@@ -799,8 +958,9 @@ syncLayerControls();
 syncGridControls();
 buildOverlayControls();
 syncOverlayControls();
+syncShadingControls();
 updateLayersState();
 await loadSample();
 sizeCanvas();
 // Exposed for automated checks in the browser.
-window.__studio = { state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame, setLayers, bakeMap, setFormat, setQuality, setOverlays };
+window.__studio = { state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame, setLayers, bakeMap, setFormat, setQuality, setOverlays, setShading, setEditing, editor, editorGeometry };

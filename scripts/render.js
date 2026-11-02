@@ -8,6 +8,8 @@
 //          --bounds west,south,east,north  area to fit inside the HUD-free part of the frame
 //          --layers roadsMinor=off,labels=40   map layers: on | off | opacity % (see src/map/layers.js)
 //          --overlays all|none|title,clock,…   informational overlays to keep (default all; none = clean frame)
+//          --layout layout.json   overlay positions / scales (src/core/hud.js), plain or keyed by format
+//          --shading off|subtle|standard|0…1   HUD backing gradients (default standard)
 //          --grid [--grid-opacity 0.5]   latitude/longitude grid (off by default)
 //          --outline   offline Natural Earth outlines instead of the online dark map
 //          --start <ISO> --end <ISO> --title <text>
@@ -24,6 +26,7 @@ import { parseArgs } from "node:util";
 import { buildComposition, ROOT } from "../src/export/composition.js";
 import { renderComposition, probeVideo, checkVideo, tagCredits } from "../src/export/render.js";
 import { attributionLines, parseOverlaySpec } from "../src/core/overlays.js";
+import { SHADING_PRESETS } from "../src/core/hud.js";
 import { parseDataset } from "../src/core/parse.js";
 import { buildReplay } from "../src/core/replay.js";
 import { renderBasemap } from "../src/map/render-basemap.js";
@@ -42,6 +45,8 @@ const { values, positionals } = parseArgs({
     frame: { type: "string" },
     layers: { type: "string" },
     overlays: { type: "string" },
+    layout: { type: "string" },
+    shading: { type: "string" },
     grid: { type: "boolean", default: false },
     "grid-opacity": { type: "string" },
     outline: { type: "boolean", default: false },
@@ -80,6 +85,8 @@ try {
   process.exit(2);
 }
 if (values["grid-opacity"]) settings.gridOpacity = Number(values["grid-opacity"]);
+if (values.layout) settings.overlayLayout = JSON.parse(readFileSync(values.layout, "utf8")); // validated per format by normalizeSettings
+if (values.shading) settings.hudShading = values.shading in SHADING_PRESETS ? SHADING_PRESETS[values.shading] : Number(values.shading);
 let layers;
 try {
   layers = normalizeLayers(parseLayerSpec(values.layers));
