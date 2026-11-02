@@ -39,7 +39,7 @@ test("12. layer defaults, validation and reset", () => {
   for (const g of LAYER_GROUPS) assert.ok(g.label && g.hint, g.id);
   // Visibility and opacity are honoured, everything else is defaulted.
   const n = normalizeLayers({ water: { visible: false }, labels: { opacity: 0.4 }, land: { visible: false, opacity: 0.2 } });
-  assert.deepEqual(n.water, { visible: false, opacity: 1 });
+  assert.deepEqual(n.water, { ...defaultLayers().water, visible: false });
   assert.deepEqual(n.labels, { visible: true, opacity: 0.4, textCase: "original" });
   assert.deepEqual(n.land, { visible: false, opacity: 0.2 });
   assert.deepEqual(n.roadsMajor, d.roadsMajor);
@@ -127,7 +127,7 @@ test("13. layer groups drive the provider's style layers; missing layers are tol
   const p1 = layerPatches(providerStyle, { roadsMinor: { opacity: 0.5 } });
   const p2 = layerPatches(providerStyle, { roadsMinor: { opacity: 0.5 } });
   assert.deepEqual(p1, p2);
-  assert.deepEqual(layerPatches(providerStyle, defaultLayers()).find((p) => p.id === "water").paint, { "fill-opacity": 1 });
+  assert.deepEqual(layerPatches(providerStyle, defaultLayers()).find((p) => p.id === "water").paint, { "fill-opacity": 1, "fill-color": byId(providerStyle, "water").paint["fill-color"] }); // Original: the provider's own colour, written explicitly
 
   // A style that lacks some (or all) of the layers: no error, unavailable groups reported.
   const partial = { version: 8, sources: {}, layers: [{ id: "background", type: "background" }, { id: "water", type: "fill", source: "x" }] };
@@ -296,6 +296,25 @@ test("15. the interactive map and the baked PNG render identical pixels for the 
     assert.ok(worst <= 2 && sum / baked.data.length < 0.05, `max diff ${worst}, mean ${(sum / baked.data.length).toFixed(4)}`);
     // And the layers really were applied in the live path (sea at 50 %, park gone).
     assert.ok(Math.abs(pixel(live, ...LEFT)[2] - 128) <= 3 && pixel(live, ...RIGHT)[1] === 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("15b. water colour, brightness and opacity: the interactive map and the baked PNG render identical pixels", { timeout: 240000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lr-parity-water-"));
+  try {
+    // Live path = layerPatches() through setPaintProperty on an already-drawn map; bake path = applyLayers() before load.
+    for (const water of [{ colorMode: "custom", customColor: "#208040" }, { colorMode: "blue", brightness: 30, opacity: 0.7 }, { colorMode: "original", brightness: -20 }]) {
+      const layers = { water };
+      const baked = decode(dir, "baked.png", (await bake(layers)).png);
+      const live = decode(dir, "live.png", await renderInteractive({ style: styleBlueGreen(), layers }));
+      let worst = 0;
+      for (let i = 0; i < baked.data.length; i++) worst = Math.max(worst, Math.abs(baked.data[i] - live.data[i]));
+      assert.ok(worst <= 2, `${JSON.stringify(water)}: max diff ${worst}`);
+      assert.notDeepEqual(pixel(live, ...LEFT), [0, 0, 255], `${JSON.stringify(water)} changed the sea in the live map`);
+      assert.deepEqual(pixel(live, ...RIGHT), [0, 255, 0], "land untouched");
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -150,6 +150,14 @@ tr.selected td { background: rgba(255, 138, 61, 0.14); color: var(--ink); }
 .layer-sub { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11.5px; padding-left: 22px; }
 .layer-sub select { padding: 2px 6px; font-size: 11.5px; }
 .layer.off .layer-sub { opacity: 0.5; }
+.water-sub { justify-content: flex-start; padding-left: 22px; }
+.water-sub > span:first-child { width: 62px; flex: none; }
+.water-sub select { flex: 1; min-width: 0; }
+.water-sub input[type="range"] { flex: 1; min-width: 0; accent-color: var(--signal); }
+.water-sub input[type="color"] { width: 30px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2); cursor: pointer; }
+.water-sub input[type="color"][hidden], .water-sub .linkbtn[hidden] { display: none; }
+.water-sub .pct { min-width: 34px; font: 11px var(--mono); color: var(--muted); text-align: right; }
+.water-sub .linkbtn { margin-left: 0; }
 .grid-row { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
 
 .h2-actions { margin-left: auto; display: flex; gap: 10px; }

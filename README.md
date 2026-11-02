@@ -203,6 +203,22 @@ checkbox and an opacity slider, plus **Reset to defaults**:
   start, secondary from about zoom 9, tertiary from 11, minor streets from 12. A road that changes class along its
   length can therefore look broken in a wide frame and joins up as you zoom in; that is the source data, not the styling.
   Roads under construction and railways are not drawn.
+- **Water appearance.** The Water row has a colour preset (*Original*, *Ocean blue*, *Deep teal*, *Custom* with a colour picker),
+  a **Brightness** slider (−50…+50 %, lightness ×½…×2, never pushed past a moderate ceiling) and **Reset** (provider colours,
+  full opacity). Opacity and visibility keep working and are independent of colour and brightness. In the OpenFreeMap style
+  water is two layers, `water` (sea, ocean, lakes) and `waterway` (rivers, canals); both are recoloured by changing their
+  MapLibre paint colour (rivers a touch lighter, as in the provider's own style). Nothing else is touched, no filter is
+  applied to the map, and *Original* writes the provider's exact colour back. The interactive map and the baked PNG use the same
+  patches, so the composer, the locked preview and every export (Full HD, Draft, all formats) show the same water. Changing it
+  on a locked frame only re-prepares the map; the replay, the strikes and the alignment do not move. The default
+  Original/0 % state keeps its existing cache entries. CLI: `--layers waterColor=blue|teal|#1f3f5f,waterBrightness=20`.
+  The stock dark sea is almost the colour of the land, which makes coastlines hard to read on a phone; Ocean blue and Deep teal
+  are dark enough to keep the cinematic look but separate sea from land.
+
+![water appearance](docs/water-appearance.jpg)
+
+*The Marmara coast of İstanbul (synthetic storm), Full HD: Original, Ocean blue, Deep teal, and a custom colour.*
+
 - **Lat / Lon grid.** Off by default, with its own opacity slider (50 % by default). It is drawn by the replay renderer
   on top of the map (so the preview and the MP4 share it) and does not re-bake the map. CLI: `--grid --grid-opacity 0.4`.
 
@@ -363,6 +379,10 @@ Focused tests (`npm run test:map` runs only the map ones):
 29. Hide all: a completely clean frame in every format; each overlay stays on its own band.
 30. The basemap is baked at the output size (real MapLibre, offline style); cache identity covers size, format, layers.
 31. The composition declares the selected size.
+32–36. Water appearance: model, validation and cache identity; patches on the provider's real layers (only water changes, Original
+    is exact, presets separate sea from land, Reset restores); bounded brightness independent of opacity; real MapLibre bakes
+    (custom colour, brightness, opacity, nothing else moves, alignment unchanged); exported MP4 water colour in all formats and
+    both qualities. 15b: interactive map and baked PNG match pixel for pixel with water colour.
 6f. Real Full HD MP4s in all three formats: size, fps, frame count, H.264 profile, strike and basemap alignment to the pixel,
     and a clean Hide all frame.
 32. Overlay layout overrides: validation, clamping, per-format entries.
