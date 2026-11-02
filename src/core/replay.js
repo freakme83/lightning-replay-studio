@@ -5,6 +5,7 @@ import { parseTimestamp } from "./parse.js";
 import { defaultOverlays, normalizeOverlays, zoneVisible } from "./overlays.js";
 import { DEFAULT_FORMAT, DEFAULT_QUALITY, FORMATS, QUALITIES, outputSize, presetOfSize } from "./format.js";
 import { designCamera, layoutFor } from "./layout.js";
+import { DEFAULT_SHADING, normalizeLayout } from "./hud.js";
 
 export const DEFAULTS = Object.freeze({
   duration: 20, // output video seconds
@@ -17,6 +18,8 @@ export const DEFAULTS = Object.freeze({
   markerScale: 1, // visual size multiplier for strike markers
   showHistory: true, // keep a faint dot for every earlier strike
   overlays: defaultOverlays(), // informational video overlays (src/core/overlays.js); all on = the classic look
+  overlayLayout: {}, // user placement of the overlays for this format (src/core/hud.js); {} = the format's preset
+  hudShading: DEFAULT_SHADING, // opacity of the HUD backing gradients, 0 (off) … 1 (the format's preset look)
   showGrid: false, // latitude / longitude graticule with degree labels
   gridOpacity: 0.5, // 0…1
   bounds: null, // {west, south, east, north} or null = fit to data (strikes fitted inside the HUD-free map area)
@@ -62,6 +65,8 @@ export function normalizeSettings(settings = {}) {
   s.markerScale = num(s.markerScale, "Marker size", 0.25, 4);
   s.showHistory = s.showHistory !== false && s.showHistory !== "false";
   s.overlays = normalizeOverlays(s.overlays);
+  s.overlayLayout = normalizeLayout(s.overlayLayout, s.format);
+  s.hudShading = num(s.hudShading, "HUD shading", 0, 1);
   s.showGrid = s.showGrid === true || s.showGrid === "true";
   s.gridOpacity = num(s.gridOpacity, "Grid opacity", 0, 1);
   for (const key of ["bounds", "frame"]) {

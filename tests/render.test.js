@@ -142,6 +142,53 @@ test("6e. exported MP4: clean frame with all overlays off, mixed overlays, credi
   }
 });
 
+test("6g. exported MP4 reproduces a custom overlay layout, scale and shading (no editor marks)", { timeout: 300000 }, async () => {
+  const { renderBasemap } = await import("../src/map/render-basemap.js");
+  const { layerStyle, decodeRgb, pixel } = await import("./helpers.js");
+  const { frameProjection, cameraOf } = await import("../src/core/projection.js");
+  const { noOverlays } = await import("../src/core/overlays.js");
+  const dir = mkdtempSync(join(tmpdir(), "lr-layoutrender-"));
+  try {
+    const text = JSON.stringify([
+      { id: "a", timestamp: "2026-11-01T14:00:00+03:00", lat: 39.9, lon: 33.3, type: "IC" },
+      { id: "b", timestamp: "2026-11-01T14:30:00+03:00", lat: 39.95, lon: 33.35, type: "IC" },
+    ]);
+    // Portrait Draft (540 × 960): the left half of the map is solid blue, so any mark over it shows.
+    const frame = frameProjection({ west: 32.2, south: 39.3, east: 33.6, north: 40.6 }, 540, 960).extentOf({ x: 0, y: 0, w: 540, h: 960 });
+    const cam = cameraOf(frameProjection(frame, 540, 960), 540, 960);
+    const mapImage = await renderBasemap({ frame, width: 540, height: 960, pixelRatio: 1, style: layerStyle(cam.lon), layers: { land: { visible: false }, boundaries: { visible: false } } });
+    const render = async (name, extra) => {
+      const settings = { format: "portrait", quality: "draft", duration: 2, frame, overlays: { ...noOverlays(), counter: true }, ...extra };
+      const { model } = buildComposition({ text, filename: "l.json", settings, outDir: join(dir, name), mapImage });
+      const out = join(dir, `${name}.mp4`);
+      await renderComposition({ dir: join(dir, name), output: out, fps: 24, quality: "draft" });
+      assert.deepEqual(checkVideo(probeVideo(out), model.settings), []);
+      execFileSync("ffmpeg", ["-v", "error", "-y", "-sseof", "-0.1", "-i", out, "-frames:v", "1", join(dir, `${name}.png`)]);
+      return decodeRgb(join(dir, `${name}.png`));
+    };
+    const isBlue = (p) => p[2] > 200 && p[0] < 40 && p[1] < 40;
+    const ink = (img, x0, y0, x1, y1) => { let n = 0; for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const p = pixel(img, x, y); if (p[0] > 150 && p[1] > 150 && p[2] > 150) n++; } return n; };
+    // Preset: the counter (left, above the bottom safe area) on its dark band.
+    const preset = await render("preset", {});
+    assert.ok(ink(preset, 32, 690, 140, 735) > 20, "preset counter digits");
+    assert.ok(!isBlue(pixel(preset, 20, 760)), "bottom band behind it");
+    // Moved to the upper left at 150 %, shading off: digits there, nothing left at the preset place, no band.
+    const custom = await render("custom", { overlayLayout: { counter: { x: 0.08, y: 0.35, scale: 1.5 } }, hudShading: 0 });
+    assert.equal(ink(custom, 32, 690, 140, 735), 0, "nothing at the preset place");
+    for (const [x, y] of [[20, 760], [100, 800], [20, 650]]) assert.ok(isBlue(pixel(custom, x, y)), `no backing band at ${x},${y}: ${pixel(custom, x, y)}`);
+    // Counter box (preset, at 1×) is about 108 × 58 px; at 150 % its digits land well above y 336 (anchor = bottom-left).
+    const inkAt = ink(custom, 40, 230, 260, 336);
+    assert.ok(inkAt > 40, `scaled counter drawn at its new place (${inkAt} bright px)`);
+    assert.ok(ink(custom, 40, 230, 260, 336) > 1.6 * ink(preset, 32, 680, 180, 740), "larger digits at 150 %");
+    // No editor outline or guide colour anywhere in the frame (turquoise #3fe0cc lines).
+    let turquoise = 0;
+    for (let y = 0; y < 960; y += 2) for (let x = 0; x < 540; x += 2) { const p = pixel(custom, x, y); if (p[1] > 200 && p[2] > 180 && p[0] < 110) turquoise++; }
+    assert.ok(turquoise < 40, `no editor marks (${turquoise} turquoise px are the "last 10 min" value and strike markers)`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("6f. Full HD MP4 in all three formats: size, fps, frames, H.264 profile, strike alignment, clean Hide all", { timeout: 900000 }, async (t) => {
   const { renderBasemap } = await import("../src/map/render-basemap.js");
   const { markerStyle, isMagenta, centroid, decodeRgb, layerStyle } = await import("./helpers.js");

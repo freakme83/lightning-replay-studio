@@ -3,6 +3,7 @@
 // rendered on its own (HyperFrames seeks frame by frame; the preview scrubs freely).
 import { formatLocal } from "./parse.js";
 import { zoneVisible } from "./overlays.js";
+import { layoutIsCustom, placeBox, placement } from "./hud.js";
 
 export const FONT_SANS = '"LR Inter", Inter, system-ui, sans-serif';
 export const FONT_MONO = '"LR Mono", "JetBrains Mono", ui-monospace, Menlo, monospace';
@@ -305,9 +306,8 @@ function niceMinutes(raw) {
   return 10080;
 }
 
-function drawStrip(ctx, m, t, k) {
-  const { settings, bins, range, timeMap, displayOffsetMin: off } = m;
-  const ov = settings.overlays;
+function drawActivity(ctx, m, t, k) {
+  const { bins, range, timeMap, displayOffsetMin: off } = m;
   const A = m.layout.activity;
   const x0 = A.x0 * k, x1 = A.x1 * k, top = A.top * k, base = A.base * k;
   const w = x1 - x0, h = base - top;
@@ -318,126 +318,175 @@ function drawStrip(ctx, m, t, k) {
   const playX = x0 + clamp01(frac) * w;
   const bw = w / bins.length;
   ctx.save();
-  if (ov.activity) {
-    // baseline
-    ctx.fillStyle = PALETTE.dim;
-    ctx.fillRect(x0, base, w, 1 * k);
-    bins.forEach((c, i) => {
-      if (!c) return;
-      const bh = Math.max(1.5 * k, (c / max) * h);
-      const bx = x0 + i * bw;
-      const past = bx + bw <= playX;
-      const partial = !past && bx < playX;
-      ctx.fillStyle = past ? `rgba(${PALETTE.signalRgb}, 0.7)` : "#1f2c35";
-      ctx.fillRect(bx + 0.5 * k, base - bh, Math.max(1, bw - 1 * k), bh);
-      if (partial) {
-        ctx.fillStyle = `rgba(${PALETTE.signalRgb}, 0.7)`;
-        ctx.fillRect(bx + 0.5 * k, base - bh, Math.max(0, playX - bx - 0.5 * k), bh);
-      }
-    });
-    // ticks
-    ctx.font = `${A.size * k}px ${FONT_MONO}`;
-    ctx.fillStyle = PALETTE.gridLabel;
-    ctx.textAlign = "center";
-    if (dataSpan > 0) {
-      const stepMin = niceMinutes(dataSpan / 60000 / 7);
-      const stepMs = stepMin * 60000;
-      // Align ticks to local wall-clock multiples of the step.
-      const offMs = off * 60000;
-      let tick = Math.ceil((range.start + offMs) / stepMs) * stepMs - offMs;
-      for (; tick <= range.end; tick += stepMs) {
-        const tx = x0 + ((tick - range.start) / dataSpan) * w;
-        ctx.fillRect(tx, base + 2 * k, 1, 4 * k);
-        const f = formatLocal(tick, off);
-        ctx.fillText(stepMin >= 1440 ? f.date.slice(5) : f.hm, tx, base + 16 * k);
-      }
+  ctx.textBaseline = "alphabetic";
+  // baseline
+  ctx.fillStyle = PALETTE.dim;
+  ctx.fillRect(x0, base, w, 1 * k);
+  bins.forEach((c, i) => {
+    if (!c) return;
+    const bh = Math.max(1.5 * k, (c / max) * h);
+    const bx = x0 + i * bw;
+    const past = bx + bw <= playX;
+    const partial = !past && bx < playX;
+    ctx.fillStyle = past ? `rgba(${PALETTE.signalRgb}, 0.7)` : "#1f2c35";
+    ctx.fillRect(bx + 0.5 * k, base - bh, Math.max(1, bw - 1 * k), bh);
+    if (partial) {
+      ctx.fillStyle = `rgba(${PALETTE.signalRgb}, 0.7)`;
+      ctx.fillRect(bx + 0.5 * k, base - bh, Math.max(0, playX - bx - 0.5 * k), bh);
     }
-    // playhead
-    ctx.fillStyle = PALETTE.accent;
-    ctx.fillRect(Math.round(playX), top - 6 * k, 1.5 * k, h + 10 * k);
-    ctx.beginPath();
-    ctx.moveTo(playX - 4 * k, top - 10 * k); ctx.lineTo(playX + 4.5 * k, top - 10 * k); ctx.lineTo(playX + 0.75 * k, top - 5 * k);
-    ctx.fill();
-    ctx.fillStyle = PALETTE.dim;
-    ctx.textAlign = "left";
-    ctx.fillText(`strikes / ${Math.max(1, Math.round(m.binMs / 6000) / 10)} min`, (A.captionX ?? A.x0) * k, top - (A.captionDy ?? 6) * k);
+  });
+  // ticks
+  ctx.font = `${A.size * k}px ${FONT_MONO}`;
+  ctx.fillStyle = PALETTE.gridLabel;
+  ctx.textAlign = "center";
+  if (dataSpan > 0) {
+    const stepMin = niceMinutes(dataSpan / 60000 / 7);
+    const stepMs = stepMin * 60000;
+    // Align ticks to local wall-clock multiples of the step.
+    const offMs = off * 60000;
+    let tick = Math.ceil((range.start + offMs) / stepMs) * stepMs - offMs;
+    for (; tick <= range.end; tick += stepMs) {
+      const tx = x0 + ((tick - range.start) / dataSpan) * w;
+      ctx.fillRect(tx, base + 2 * k, 1, 4 * k);
+      const f = formatLocal(tick, off);
+      ctx.fillText(stepMin >= 1440 ? f.date.slice(5) : f.hm, tx, base + 16 * k);
+    }
   }
-  // counters
-  if (ov.counter) {
-    const C = m.layout.counter;
-    const cx = C.x * k;
-    const count = m.countAt(t);
-    ctx.textAlign = "left";
-    ctx.fillStyle = PALETTE.muted;
-    ctx.font = `${C.label.size * k}px ${FONT_MONO}`;
-    ctx.fillText("STRIKES", cx, C.label.y * k);
-    ctx.font = `500 ${C.value.size * k}px ${FONT_MONO}`;
-    ctx.fillStyle = PALETTE.ink;
-    const digits = String(m.totalEvents).length;
-    const cs = String(count).padStart(digits, "0");
-    ctx.fillText(cs, cx, C.value.y * k);
-    const cw = ctx.measureText(cs).width;
-    ctx.font = `${C.value.total * k}px ${FONT_MONO}`;
-    ctx.fillStyle = PALETTE.muted;
-    ctx.fillText(` / ${m.totalEvents}`, cx + cw, C.value.y * k);
-    ctx.font = `${C.recent.size * k}px ${FONT_MONO}`;
-    ctx.fillText("LAST 10 MIN", cx, C.recent.y * k);
-    ctx.fillStyle = PALETTE.signal;
-    ctx.fillText(String(m.recentCount(t, 600000)), cx + C.recent.dx * k, C.recent.y * k);
+  // playhead
+  ctx.fillStyle = PALETTE.accent;
+  ctx.fillRect(Math.round(playX), top - 6 * k, 1.5 * k, h + 10 * k);
+  ctx.beginPath();
+  ctx.moveTo(playX - 4 * k, top - 10 * k); ctx.lineTo(playX + 4.5 * k, top - 10 * k); ctx.lineTo(playX + 0.75 * k, top - 5 * k);
+  ctx.fill();
+  ctx.fillStyle = PALETTE.dim;
+  ctx.textAlign = "left";
+  ctx.fillText(`strikes / ${Math.max(1, Math.round(m.binMs / 6000) / 10)} min`, (A.captionX ?? A.x0) * k, top - (A.captionDy ?? 6) * k);
+  ctx.restore();
+}
+
+function drawCounter(ctx, m, t, k) {
+  const C = m.layout.counter;
+  const cx = C.x * k;
+  const count = m.countAt(t);
+  ctx.save();
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+  ctx.fillStyle = PALETTE.muted;
+  ctx.font = `${C.label.size * k}px ${FONT_MONO}`;
+  ctx.fillText("STRIKES", cx, C.label.y * k);
+  ctx.font = `500 ${C.value.size * k}px ${FONT_MONO}`;
+  ctx.fillStyle = PALETTE.ink;
+  const digits = String(m.totalEvents).length;
+  const cs = String(count).padStart(digits, "0");
+  ctx.fillText(cs, cx, C.value.y * k);
+  const cw = ctx.measureText(cs).width;
+  ctx.font = `${C.value.total * k}px ${FONT_MONO}`;
+  ctx.fillStyle = PALETTE.muted;
+  ctx.fillText(` / ${m.totalEvents}`, cx + cw, C.value.y * k);
+  ctx.font = `${C.recent.size * k}px ${FONT_MONO}`;
+  ctx.fillText("LAST 10 MIN", cx, C.recent.y * k);
+  ctx.fillStyle = PALETTE.signal;
+  ctx.fillText(String(m.recentCount(t, 600000)), cx + C.recent.dx * k, C.recent.y * k);
+  ctx.restore();
+}
+
+/** The clock's three rows: [slot, font, text, colour]. */
+function clockRows(m, t, k) {
+  const K = m.layout.clock;
+  const now = formatLocal(m.timeMap.toData(t), m.displayOffsetMin);
+  return [
+    [K.label, `${K.label.size * k}px ${FONT_MONO}`, `LOCAL TIME · ${now.zone}`, PALETTE.muted],
+    [K.time, `500 ${K.time.size * k}px ${FONT_MONO}`, now.time, PALETTE.ink],
+    [K.date, `${K.date.size * k}px ${FONT_MONO}`, now.date, PALETTE.muted],
+  ];
+}
+
+function drawClock(ctx, m, t, k) {
+  const K = m.layout.clock;
+  ctx.save();
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "right";
+  for (const [r, font, str, color] of clockRows(m, t, k)) {
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.fillText(str, K.xr * k, r.y * k);
   }
   ctx.restore();
 }
 
-function drawHeader(ctx, m, t, k) {
-  const { settings, meta, timeMap, displayOffsetMin: off } = m;
-  const { title: T, notice: N, clock: K } = m.layout;
-  const W = settings.width;
-  const now = formatLocal(timeMap.toData(t), off);
-  const ov = settings.overlays;
+/**
+ * Width the title block's rows may use (in its own, unscaled px). In the preset layout they stop
+ * short of the clock text on the same row (label↔label, title↔time, summary↔date); once the user
+ * has placed the title or the clock, the title may use the frame up to its right edge instead.
+ */
+function titleRoom(ctx, m, t, k) {
+  const { settings } = m;
+  const L = m.layout, T = L.title, K = L.clock, W = settings.width;
+  const pt = placement(L, settings.overlayLayout, "title", W, settings.height);
+  const pc = placement(L, settings.overlayLayout, "clock", W, settings.height);
+  if (pt.moved || pc.moved) {
+    // Up to the frame edge, or up to the clock where the user placed it, if it shares the title's rows.
+    let right = W - 8 * k;
+    if (settings.overlays.clock) {
+      const map = (p, x, y) => [p.x + (x - p.x0) * p.s, p.y + (y - p.y0) * p.s];
+      const rows = clockRows(m, t, k);
+      const [cl, ct] = map(pc, K.xr * k - Math.max(...rows.map(([, font, str]) => { ctx.save(); ctx.font = font; const w = ctx.measureText(str).width; ctx.restore(); return w; })), (K.label.y - K.label.size) * k);
+      const [, cb] = map(pc, 0, (K.date.y + 3) * k);
+      const [, tt] = map(pt, 0, (T.label.y - T.label.size) * k), [, tb] = map(pt, 0, (T.summary.y + 3) * k);
+      if (ct < tb && cb > tt && cl > pt.x) right = Math.min(right, cl - 16 * k);
+    }
+    const free = Math.max(40 * k, (right - pt.x) / pt.s);
+    return { label: free, name: free, summary: free };
+  }
+  const full = W - T.x * k - 24 * k;
+  if (!settings.overlays.clock) return { label: full, name: full, summary: full };
   const gap = 16 * k;
-  // Space the title block's rows may use: up to the clock text that shares that row (if the clock is on).
-  const room = { label: W - T.x * k - 24 * k, name: W - T.x * k - 24 * k, summary: W - T.x * k - 24 * k };
+  const [label, name, summary] = clockRows(m, t, k).map(([, font, str]) => {
+    ctx.save();
+    ctx.font = font;
+    const w = ctx.measureText(str).width;
+    ctx.restore();
+    return K.xr * k - w - gap - T.x * k;
+  });
+  return { label, name, summary };
+}
+
+function drawTitle(ctx, m, t, k) {
+  const { settings, meta, timeMap } = m;
+  const T = m.layout.title;
+  const room = titleRoom(ctx, m, t, k);
   ctx.save();
   ctx.textBaseline = "alphabetic";
-  if (ov.clock) {
-    ctx.textAlign = "right";
-    const row = (r, font, str, color) => {
-      ctx.font = font;
-      ctx.fillStyle = color;
-      ctx.fillText(str, K.xr * k, r.y * k);
-      return K.xr * k - ctx.measureText(str).width - gap - T.x * k;
-    };
-    const zoneRoom = row(K.label, `${K.label.size * k}px ${FONT_MONO}`, `LOCAL TIME · ${now.zone}`, PALETTE.muted);
-    const timeRoom = row(K.time, `500 ${K.time.size * k}px ${FONT_MONO}`, now.time, PALETTE.ink);
-    const dateRoom = row(K.date, `${K.date.size * k}px ${FONT_MONO}`, now.date, PALETTE.muted);
-    // Only rows at the same height can collide: label↔label, title↔time, summary↔date.
-    room.label = zoneRoom; room.name = timeRoom; room.summary = dateRoom;
-  }
   ctx.textAlign = "left";
-  if (ov.title) {
-    ctx.font = `500 ${T.label.size * k}px ${FONT_MONO}`;
-    ctx.fillStyle = PALETTE.signal;
-    ctx.fillText("LIGHTNING REPLAY", T.x * k, T.label.y * k);
-    ctx.font = `600 ${T.name.size * k}px ${FONT_SANS}`;
-    ctx.fillStyle = PALETTE.ink;
-    drawFitted(ctx, settings.title || meta.name || "Lightning dataset", T.x * k, T.name.y * k, room.name, 0.72);
-    const span = m.range.end - m.range.start;
-    const mins = Math.round(span / 60000);
-    ctx.font = `${T.summary.size * k}px ${FONT_MONO}`;
-    ctx.fillStyle = PALETTE.muted;
-    const dur = mins >= 120 ? `${(mins / 60).toFixed(mins % 60 ? 1 : 0)} h` : `${mins} min`;
-    drawFitted(ctx, `${m.totalEvents} strikes · ${dur} storm → ${settings.duration} s replay (×${Math.round(span / 1000 / timeMap.span)})`, T.x * k, T.summary.y * k, room.summary, 0.85);
-  }
-  if (ov.syntheticNotice && meta.synthetic) {
-    ctx.font = `500 ${N.size * k}px ${FONT_MONO}`;
-    const label = "SYNTHETIC DATA · FICTIONAL STORM · NOT REAL DETECTIONS";
-    const tw = ctx.measureText(label).width;
-    ctx.strokeStyle = `rgba(${PALETTE.accentRgb}, 0.7)`;
-    ctx.lineWidth = 1 * k;
-    ctx.strokeRect(N.x * k + 0.5, N.y * k + 0.5, tw + 12 * k, N.h * k);
-    ctx.fillStyle = PALETTE.accent;
-    ctx.fillText(label, N.x * k + 6 * k, (N.y + N.h * 0.75) * k);
-  }
+  ctx.font = `500 ${T.label.size * k}px ${FONT_MONO}`;
+  ctx.fillStyle = PALETTE.signal;
+  ctx.fillText("LIGHTNING REPLAY", T.x * k, T.label.y * k);
+  ctx.font = `600 ${T.name.size * k}px ${FONT_SANS}`;
+  ctx.fillStyle = PALETTE.ink;
+  drawFitted(ctx, settings.title || meta.name || "Lightning dataset", T.x * k, T.name.y * k, room.name, 0.72);
+  const span = m.range.end - m.range.start;
+  const mins = Math.round(span / 60000);
+  ctx.font = `${T.summary.size * k}px ${FONT_MONO}`;
+  ctx.fillStyle = PALETTE.muted;
+  const dur = mins >= 120 ? `${(mins / 60).toFixed(mins % 60 ? 1 : 0)} h` : `${mins} min`;
+  drawFitted(ctx, `${m.totalEvents} strikes · ${dur} storm → ${settings.duration} s replay (×${Math.round(span / 1000 / timeMap.span)})`, T.x * k, T.summary.y * k, room.summary, 0.85);
+  ctx.restore();
+}
+
+function drawNotice(ctx, m, t, k) {
+  if (!m.meta.synthetic) return; // only fictional datasets carry the notice
+  const N = m.layout.notice;
+  ctx.save();
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+  ctx.font = `500 ${N.size * k}px ${FONT_MONO}`;
+  const label = "SYNTHETIC DATA · FICTIONAL STORM · NOT REAL DETECTIONS";
+  const tw = ctx.measureText(label).width;
+  ctx.strokeStyle = `rgba(${PALETTE.accentRgb}, 0.7)`;
+  ctx.lineWidth = 1 * k;
+  ctx.strokeRect(N.x * k + 0.5, N.y * k + 0.5, tw + 12 * k, N.h * k);
+  ctx.fillStyle = PALETTE.accent;
+  ctx.fillText(label, N.x * k + 6 * k, (N.y + N.h * 0.75) * k);
   ctx.restore();
 }
 
@@ -465,7 +514,7 @@ const smoothstep = (x) => x * x * (3 - 2 * x);
  * A HUD backing scrim from [y, alpha] control points (design units, top to bottom), eased between
  * points so the tint has no visible start or end edge.
  */
-function drawScrim(ctx, points, W, k) {
+function drawScrim(ctx, points, W, k, shade = 1) {
   const y0 = points[0][0] * k, y1 = points[points.length - 1][0] * k;
   const g = ctx.createLinearGradient(0, y0, 0, y1);
   const STEPS = 12;
@@ -473,12 +522,186 @@ function drawScrim(ctx, points, W, k) {
     const [ya, aa] = points[i], [yb, ab] = points[i + 1];
     for (let j = i ? 1 : 0; j <= STEPS; j++) {
       const f = j / STEPS;
-      const a = aa + (ab - aa) * smoothstep(f);
+      const a = (aa + (ab - aa) * smoothstep(f)) * shade;
       g.addColorStop(((ya + (yb - ya) * f) * k - y0) / (y1 - y0), `rgba(6, 8, 11, ${+a.toFixed(4)})`);
     }
   }
   ctx.fillStyle = g;
   ctx.fillRect(0, y0, W, y1 - y0);
+}
+
+// ---- HUD: the eight overlays, their placement, and their backing ----
+
+/** Draw order of the overlays (unchanged from the classic HUD). */
+const HUD = [
+  ["clock", drawClock],
+  ["title", drawTitle],
+  ["syntheticNotice", drawNotice],
+  ["scaleBar", (ctx, m, t, k) => drawScaleBar(ctx, m, k)],
+  ["legend", (ctx, m, t, k) => drawLegend(ctx, m, k)],
+  ["activity", drawActivity],
+  ["counter", drawCounter],
+  ["attribution", (ctx, m, t, k) => drawFooterNote(ctx, m, k)],
+];
+
+const DEFAULT_HALO = { blur: 6, color: "rgba(3, 5, 8, 0.85)" };
+
+/** Run `fn` with the context mapped from the preset placement of overlay `p` to its user placement. */
+function placed(ctx, p, fn) {
+  if (!p.moved) return fn();
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.scale(p.s, p.s);
+  ctx.translate(-p.x0, -p.y0);
+  fn();
+  ctx.restore();
+}
+
+/**
+ * A 2D context stand-in that draws nothing and records the extent (in its caller's px) of
+ * everything an overlay draws: text (measured with the real context's fonts), rectangles and paths.
+ */
+function extentRecorder(measureCtx) {
+  let tr = { tx: 0, ty: 0, s: 1 };
+  const stack = [];
+  const st = { font: "10px sans-serif", textAlign: "left", textBaseline: "alphabetic" };
+  const box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+  const add = (x, y) => {
+    const X = tr.tx + x * tr.s, Y = tr.ty + y * tr.s;
+    if (X < box.x0) box.x0 = X; if (X > box.x1) box.x1 = X;
+    if (Y < box.y0) box.y0 = Y; if (Y > box.y1) box.y1 = Y;
+  };
+  const measure = (str) => {
+    measureCtx.save();
+    measureCtx.font = st.font;
+    const w = measureCtx.measureText(str).width;
+    measureCtx.restore();
+    return w;
+  };
+  const size = () => Number(/(\d+(?:\.\d+)?)px/.exec(st.font)?.[1] ?? 10);
+  const api = {
+    save: () => stack.push({ tr: { ...tr }, st: { ...st } }),
+    restore: () => { const top = stack.pop(); if (top) { tr = top.tr; Object.assign(st, top.st); } },
+    translate: (x, y) => { tr.tx += x * tr.s; tr.ty += y * tr.s; },
+    scale: (a) => { tr.s *= a; },
+    measureText: (str) => ({ width: measure(String(str)) }),
+    fillText: (str, x, y) => {
+      const w = measure(String(str)), z = size();
+      const l = st.textAlign === "right" || st.textAlign === "end" ? x - w : st.textAlign === "center" ? x - w / 2 : x;
+      const [up, down] = st.textBaseline === "middle" ? [0.5, 0.5] : st.textBaseline === "top" ? [0, 1] : [0.78, 0.24];
+      add(l, y - z * up); add(l + w, y + z * down);
+    },
+    fillRect: (x, y, w, h) => { add(x, y); add(x + w, y + h); },
+    strokeRect: (x, y, w, h) => { add(x, y); add(x + w, y + h); },
+    moveTo: (x, y) => add(x, y),
+    lineTo: (x, y) => add(x, y),
+    arc: (x, y, r) => { add(x - r, y - r); add(x + r, y + r); },
+  };
+  const ctx = new Proxy(st, {
+    get: (o, key) => (key in api ? api[key] : key in o ? o[key] : () => {}),
+    set: (o, key, v) => { o[key] = v; return true; },
+  });
+  return { ctx, extent: () => (box.x0 === Infinity ? null : { x: box.x0, y: box.y0, w: box.x1 - box.x0, h: box.y1 - box.y0 }) };
+}
+
+/**
+ * Where every overlay is drawn, measured from the renderer itself: for each overlay id,
+ * { placement, base (box at the preset placement, output px), box (where it is drawn), visible }.
+ * `base` is null for an overlay that draws nothing (the synthetic notice on a real dataset).
+ * Hidden overlays are measured too, so they keep a position that can be edited.
+ */
+export function overlayGeometry(ctx, m, t = m.settings.duration) {
+  const { settings } = m;
+  const key = JSON.stringify([settings.overlays, settings.overlayLayout, settings.title, settings.width, settings.height]);
+  if (m._hudBase?.key !== key) {
+    const base = {};
+    for (const [id, fn] of HUD) {
+      const rec = extentRecorder(ctx);
+      fn(rec.ctx, m, t, m.layout.k);
+      base[id] = rec.extent();
+    }
+    m._hudBase = { key, base };
+  }
+  const out = {};
+  for (const [id] of HUD) {
+    const p = placement(m.layout, settings.overlayLayout, id, settings.width, settings.height);
+    const b = m._hudBase.base[id];
+    out[id] = { id, placement: p, base: b, box: b ? placeBox(p, b) : null, visible: !!settings.overlays[id] && !!b };
+  }
+  return out;
+}
+
+/** The classic linear band of one zone, `reach` px from its edge, opacity × `shade`. */
+function drawBand(ctx, L, zone, W, H, k, shade) {
+  if (L.scrims?.[zone]) return drawScrim(ctx, L.scrims[zone], W, k, shade);
+  const rgba = (a) => `rgba(6, 8, 11, ${+(a * shade).toFixed(4)})`;
+  if (zone === "top") {
+    const h = L.bands.top * k;
+    const g1 = ctx.createLinearGradient(0, 0, 0, h);
+    g1.addColorStop(0, rgba(0.92)); g1.addColorStop(1, rgba(0));
+    ctx.fillStyle = g1; ctx.fillRect(0, 0, W, h);
+  } else {
+    const h = L.bands.bottom * k;
+    const g2 = ctx.createLinearGradient(0, H - h, 0, H);
+    g2.addColorStop(0, rgba(0)); g2.addColorStop(0.35, rgba(0.9)); g2.addColorStop(1, rgba(0.96));
+    ctx.fillStyle = g2; ctx.fillRect(0, H - h, W, h);
+  }
+}
+
+/**
+ * A soft, feathered backing behind one overlay placed away from its band (a blurred shadow of a
+ * rectangle drawn outside the frame, so only the shadow lands).
+ */
+function drawLocalBacking(ctx, box, W, k, shade) {
+  const pad = 10 * k, off = W * 3;
+  ctx.save();
+  ctx.shadowColor = `rgba(6, 8, 11, ${+(0.62 * shade).toFixed(4)})`;
+  ctx.shadowBlur = 22 * k;
+  ctx.shadowOffsetX = off;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(box.x - pad - off, box.y - pad, box.w + 2 * pad, box.h + 2 * pad);
+  ctx.restore();
+}
+
+function drawHud(ctx, m, t, k) {
+  const { settings } = m;
+  const { width: W, height: H, overlays: ov } = settings;
+  const L = m.layout;
+  const shade = settings.hudShading ?? 1;
+  const custom = layoutIsCustom(L, settings.overlayLayout, W, H);
+  if (shade > 0) {
+    // The backing bands keep text readable over the map; each exists only while an overlay needs it.
+    // An overlay the user moved belongs to the band its box falls in, or gets its own soft backing.
+    const zones = { top: zoneVisible(ov, "top", L), bottom: zoneVisible(ov, "bottom", L) };
+    const local = [];
+    if (custom) {
+      zones.top = zones.bottom = false;
+      for (const g of Object.values(overlayGeometry(ctx, m, t))) {
+        if (!g.visible) continue;
+        if (!g.placement.moved) { zones[L.zone[g.id]] = true; continue; }
+        const cy = g.box.y + g.box.h / 2;
+        if (cy <= L.bands.top * k) zones.top = true;
+        else if (cy >= H - L.bands.bottom * k) zones.bottom = true;
+        else local.push(g.box);
+      }
+    }
+    if (zones.top) drawBand(ctx, L, "top", W, H, k, shade);
+    if (zones.bottom) drawBand(ctx, L, "bottom", W, H, k, shade);
+    for (const box of local) drawLocalBacking(ctx, box, W, k, shade);
+  }
+  ctx.save();
+  // Soft local shadow under every HUD mark (text, chart, rules): always in portrait, and wherever
+  // the backing is lighter than the preset, so the text stays legible on the map.
+  const halo = L.halo ?? (shade < 1 ? DEFAULT_HALO : null);
+  if (halo) {
+    ctx.shadowColor = halo.color;
+    ctx.shadowBlur = halo.blur * k;
+  }
+  for (const [id, fn] of HUD) {
+    if (!ov[id]) continue;
+    placed(ctx, placement(L, settings.overlayLayout, id, W, H), () => fn(ctx, m, t, k));
+  }
+  ctx.restore();
 }
 
 /**
@@ -498,39 +721,8 @@ export function drawFrame(ctx, m, t, opts = {}) {
   drawGrid(ctx, m, k);
   drawPlaces(ctx, m, k);
   drawStrikes(ctx, m, t, k);
-  // Informational overlays (src/core/overlays.js). The HUD backing bands keep their text
-  // readable over the map, so each band exists only while an overlay needs it.
-  const ov = m.settings.overlays;
-  if (zoneVisible(ov, "top", L)) {
-    if (L.scrims?.top) drawScrim(ctx, L.scrims.top, W, k);
-    else {
-      const h = L.bands.top * k;
-      const g1 = ctx.createLinearGradient(0, 0, 0, h);
-      g1.addColorStop(0, "rgba(6, 8, 11, 0.92)"); g1.addColorStop(1, "rgba(6, 8, 11, 0)");
-      ctx.fillStyle = g1; ctx.fillRect(0, 0, W, h);
-    }
-  }
-  if (zoneVisible(ov, "bottom", L)) {
-    if (L.scrims?.bottom) drawScrim(ctx, L.scrims.bottom, W, k);
-    else {
-      const h = L.bands.bottom * k;
-      const g2 = ctx.createLinearGradient(0, H - h, 0, H);
-      g2.addColorStop(0, "rgba(6, 8, 11, 0)"); g2.addColorStop(0.35, "rgba(6, 8, 11, 0.9)"); g2.addColorStop(1, "rgba(6, 8, 11, 0.96)");
-      ctx.fillStyle = g2; ctx.fillRect(0, H - h, W, h);
-    }
-  }
-  ctx.save();
-  if (L.halo) {
-    // Soft local shadow under every HUD mark (text, chart, rules) instead of a heavy backing band.
-    ctx.shadowColor = L.halo.color;
-    ctx.shadowBlur = L.halo.blur * k;
-  }
-  drawHeader(ctx, m, t, k);
-  if (ov.scaleBar) drawScaleBar(ctx, m, k);
-  if (ov.legend) drawLegend(ctx, m, k);
-  drawStrip(ctx, m, t, k);
-  if (ov.attribution) drawFooterNote(ctx, m, k);
-  ctx.restore();
+  // Informational overlays (src/core/overlays.js), each at its placement (src/core/hud.js).
+  drawHud(ctx, m, t, k);
   if (opts.highlight) {
     const e = opts.highlight;
     ctx.strokeStyle = "rgba(255,255,255,0.85)";

@@ -83,6 +83,10 @@ details summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
 .stage-col { --ar: 1.7778; --max-h: calc(100vh - 360px); --min-w: 480px; }
 .stage-col[data-format="portrait"] { --ar: 0.5625; --max-h: calc(100vh - 215px); --min-w: 300px; }
 .stage-col[data-format="square"] { --ar: 1; --max-h: calc(100vh - 330px); --min-w: 380px; }
+/* Edit Layout adds the inspector under the stage: leave room for it instead of squeezing the stage. */
+.stage-col.editing { --max-h: calc(100vh - 450px); }
+.stage-col.editing[data-format="portrait"] { --max-h: calc(100vh - 320px); }
+.stage-col > .stage, .stage-col > .transport, .stage-col > .hud-inspector { flex-shrink: 0; } /* never distort the 16:9 / 9:16 / 1:1 stage */
 .stage { position: relative; width: min(100%, calc(var(--max-h) * var(--ar))); min-width: var(--min-w); aspect-ratio: var(--ar); margin: 0 auto; background: var(--ground); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; background: var(--ground); }
 .stage canvas[hidden] { display: none; }
@@ -165,3 +169,62 @@ tr.selected td { background: rgba(255, 138, 61, 0.14); color: var(--ink); }
 .seg .s11 { width: 18px; height: 18px; }
 .frame-guide.safe::before, .frame-guide.safe::after { background: repeating-linear-gradient(135deg, rgba(255, 138, 61, 0.22) 0 6px, rgba(6, 8, 11, 0.3) 6px 12px); }
 #format-state .warn { color: var(--accent); }
+
+/* ---- Overlay layout editor ---- */
+.hud-editor { position: absolute; inset: 0; z-index: 3; touch-action: none; user-select: none; -webkit-user-select: none; outline: none; }
+.hud-editor[hidden] { display: none; }
+.hud-editor:focus-visible { box-shadow: inset 0 0 0 1px rgba(63, 224, 204, 0.5); }
+.hud-box { position: absolute; pointer-events: none; border: 1px dashed rgba(63, 224, 204, 0.28); border-radius: 2px; }
+.hud-box[hidden] { display: none; }
+.hud-box.hover { border-style: solid; border-color: rgba(63, 224, 204, 0.7); background: rgba(63, 224, 204, 0.05); }
+.hud-box.selected { border: 1px solid var(--signal); background: rgba(63, 224, 204, 0.06); }
+.hud-box.ghost { border-color: rgba(123, 138, 150, 0.7); background: repeating-linear-gradient(135deg, rgba(123, 138, 150, 0.1) 0 4px, transparent 4px 8px); }
+.hud-box.locked.selected { border-color: var(--accent); background: rgba(255, 138, 61, 0.05); }
+.hud-tag { position: absolute; left: -1px; bottom: calc(100% + 3px); display: none; white-space: nowrap; padding: 1px 5px; border-radius: 3px; background: rgba(6, 8, 11, 0.9); border: 1px solid var(--line); font: 10px var(--mono); color: var(--signal); }
+.hud-box.selected .hud-tag, .hud-box.hover .hud-tag { display: block; }
+.hud-box.locked .hud-tag { color: var(--accent); }
+.hud-handle { position: absolute; width: 9px; height: 9px; margin: -5px; background: var(--ground); border: 1.5px solid var(--signal); border-radius: 2px; display: none; pointer-events: auto; touch-action: none; }
+.hud-box.selected:not(.locked) .hud-handle { display: block; }
+.hud-handle::after { content: ""; position: absolute; inset: -8px; } /* larger touch target */
+.hud-handle.nw { left: 0; top: 0; cursor: nwse-resize; }
+.hud-handle.ne { right: 0; top: 0; margin-right: -5px; cursor: nesw-resize; }
+.hud-handle.sw { left: 0; bottom: 0; margin-bottom: -5px; cursor: nesw-resize; }
+.hud-handle.se { right: 0; bottom: 0; margin: 0 -5px -5px 0; cursor: nwse-resize; }
+.hud-editor.dragging .hud-box:not(.selected) { opacity: 0.35; }
+.hud-guides { position: absolute; inset: 0; pointer-events: none; }
+.hud-guide { position: absolute; display: block; pointer-events: none; border: 0 solid transparent; --c: rgba(180, 200, 212, 0.55); }
+.hud-guide.v { top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--c); }
+.hud-guide.h { left: 0; right: 0; height: 0; border-top: 1px dashed var(--c); }
+.hud-guide.major { --c: rgba(63, 224, 204, 0.8); }
+.hud-guide.major.v { border-left-style: solid; }
+.hud-guide.major.h { border-top-style: solid; }
+.hud-guide.safe { --c: rgba(255, 138, 61, 0.65); }
+.hud-guide.overlay { --c: rgba(63, 224, 204, 0.45); }
+
+.hud-inspector { width: min(100%, max(480px, calc(var(--max-h) * var(--ar)))); margin: 0 auto; padding: 8px 10px; border: 1px solid rgba(63, 224, 204, 0.35); border-radius: 6px; background: var(--panel); display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.hud-inspector[hidden] { display: none; }
+.insp-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.insp-badge { font: 500 10px var(--mono); letter-spacing: 0.08em; color: var(--signal); }
+.insp-row select { padding: 3px 6px; font-size: 12px; max-width: 190px; }
+.insp-num { display: flex; align-items: center; gap: 4px; color: var(--muted); font: 11px var(--mono); }
+.insp-num input { width: 64px; padding: 3px 5px; text-align: right; font: 11.5px var(--mono); }
+.insp-scale { display: flex; align-items: center; gap: 6px; color: var(--muted); font: 11px var(--mono); }
+.insp-scale input { width: 110px; accent-color: var(--signal); }
+.insp-scale span { min-width: 38px; color: var(--ink); }
+.hud-inspector button { padding: 4px 9px; font-size: 12px; }
+.hud-inspector button.toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.hud-inspector .check { margin: 0; font-size: 12px; }
+.hud-inspector .check em { font: 10.5px var(--mono); font-style: normal; color: var(--dim); }
+.hud-inspector .linkbtn { margin-left: 0; }
+.insp-hint { flex: 1 1 200px; color: var(--dim); font-size: 11.5px; }
+.hud-inspector.no-sel .insp-dep { opacity: 0.35; pointer-events: none; }
+.edit-btn { padding: 5px 10px; font-size: 12px; white-space: nowrap; }
+.edit-btn[aria-pressed="true"] { color: var(--signal); border-color: var(--signal); }
+
+.shading { margin-top: 10px; }
+.sub-h { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.sub-h em { font: 11px var(--mono); font-style: normal; color: var(--dim); }
+.seg.three.compact { margin-bottom: 4px; }
+.seg.compact button { padding: 4px; flex-direction: row; }
+#shading { width: 100%; accent-color: var(--signal); }
+@media (max-width: 900px) { .readout { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; } }
