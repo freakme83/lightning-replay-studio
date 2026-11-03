@@ -32,6 +32,35 @@
           <div id="messages"></div>
         </section>
 
+        <section id="profiles">
+          <h2>Studio profiles <span id="profile-badge" class="pill custom" hidden>modified</span></h2>
+          <div class="row profile-pick">
+            <select id="profile-select" aria-label="Saved profiles"></select>
+            <button type="button" id="profile-apply" class="secondary" title="Apply the selected profile to this dataset">Apply</button>
+          </div>
+          <label class="check" id="profile-restore-row" hidden><input type="checkbox" id="profile-restore-frame" /> Also restore its saved map frame</label>
+          <div class="row">
+            <button type="button" id="profile-save" class="secondary" title="Save the current look as a new profile">Save as…</button>
+            <button type="button" id="profile-update" class="secondary" title="Replace the selected profile with the current settings">Update</button>
+          </div>
+          <form id="profile-form" class="profile-form" hidden>
+            <p class="note" id="profile-form-note"></p>
+            <input id="profile-name" type="text" maxlength="60" autocomplete="off" aria-label="Profile name" />
+            <div class="row"><button type="submit" id="profile-ok">Save profile</button><button type="button" id="profile-cancel" class="secondary">Cancel</button></div>
+          </form>
+          <div class="profile-links" id="profile-links">
+            <button type="button" class="linkbtn" data-act="rename">Rename</button>
+            <button type="button" class="linkbtn" data-act="duplicate">Duplicate</button>
+            <button type="button" class="linkbtn" data-act="delete">Delete</button>
+            <button type="button" class="linkbtn" data-act="export" title="Download the selected profile as a JSON file">Export</button>
+            <button type="button" class="linkbtn" data-act="import" title="Add a profile from a JSON file">Import</button>
+          </div>
+          <label class="check"><input type="checkbox" id="profile-save-frame" /> Save the map frame too</label>
+          <p class="note" id="profile-state" role="status"></p>
+          <p class="note">A profile holds the look of a video, not a dataset. The map frame is left alone unless you ask for it.</p>
+          <input type="file" id="profile-file" accept=".json,application/json" hidden />
+        </section>
+
         <section>
           <h2>Replay</h2>
           <label class="field"><span>Video duration <em>s</em></span><input id="duration" type="number" min="2" max="3600" step="1" value="20" /></label>

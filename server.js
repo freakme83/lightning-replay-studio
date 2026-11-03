@@ -39,6 +39,7 @@ const MOUNTS = {
   "/src/core/": join(ROOT, "src", "core"),
   "/src/map/": join(ROOT, "src", "map"),
   "/src/editor/": join(ROOT, "src", "editor"),
+  "/src/profiles/": join(ROOT, "src", "profiles"),
   "/vendor/maplibre/": join(ROOT, "node_modules", "maplibre-gl", "dist"),
   "/basemaps/": BASEMAP_DIR,
   "/basemap/": join(ROOT, "basemap"),

@@ -14,6 +14,9 @@ import { createComposer } from "./composer.js";
 import { createLayoutEditor } from "./layout-editor.js";
 import { createFollowGate, scrollRowIntoContainer, watchUserScroll } from "./table-follow.js";
 import { OVERLAYS, defaultOverlays, noOverlays, normalizeOverlays, attributionLines, zoneVisible } from "/src/core/overlays.js";
+import { createProfilesUi } from "./profiles-ui.js";
+import { createProfileStore } from "/src/profiles/profile-store.js";
+import { captureSettings, normalizeProfileSettings } from "/src/profiles/profile.js";
 import { LAYER_GROUPS, WATER_BRIGHTNESS, WATER_PRESETS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
 
 const $ = (id) => document.getElementById(id);
@@ -53,6 +56,8 @@ const state = {
   selected: null,
   lastRowNow: -1,
 };
+let profilesUi = null; // Studio Profiles panel (created at the end); told whenever a saved setting may have changed
+const settingsChanged = () => profilesUi?.refresh();
 
 // ---------- geography & fonts ----------
 async function loadGeo() {
@@ -120,6 +125,7 @@ function rebuild({ keepTime = true } = {}) {
   renderTable();
   updateInfo();
   draw();
+  settingsChanged();
 }
 
 function loadText(text, filename) {
@@ -346,6 +352,7 @@ function syncFormatControls() {
   $("edges-note").textContent = `Edges are widened on one axis to keep the ${f.ratio} video shape.`;
   $("stage-col").dataset.format = state.format;
   $("export").textContent = `Export ${q.id === "hd" ? "Full HD" : "Draft"} MP4`;
+  settingsChanged();
 }
 
 const formatNote = (html) => { $("format-state").innerHTML = html; };
@@ -440,6 +447,7 @@ function setLayers(next) {
   syncLayerControls();
   state.composer?.setLayers(state.mapLayers); // live in the interactive map
   scheduleRebake();
+  settingsChanged();
 }
 
 /** After a layer or output-size change on a locked frame: re-bake only the map, once the controls settle. */
@@ -506,6 +514,7 @@ function setOverlays(next) {
     if (state.editing) buildInspectorList();
     draw();
   }
+  settingsChanged();
 }
 // ---------- overlay layout & shading ----------
 /** Layout and shading only change what the replay canvas draws: no rebuild, no map re-bake, the timeline stays put. */
@@ -514,12 +523,13 @@ function applyLayout() {
   state.model.settings.overlayLayout = state.layouts.get(state.format);
   state.model.settings.hudShading = state.shading;
   draw();
+  settingsChanged();
 }
 
 function setShading(v) {
   state.shading = Math.min(1, Math.max(0, Math.round(v * 100) / 100));
   syncShadingControls();
-  applyLayout();
+  applyLayout(); // also reports the change
 }
 function syncShadingControls() {
   const name = shadingPreset(state.shading);
@@ -992,4 +1002,96 @@ updateLayersState();
 await loadSample();
 sizeCanvas();
 // Exposed for automated checks in the browser.
-window.__studio = { state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame, setLayers, bakeMap, setFormat, setQuality, setOverlays, setShading, setEditing, editor, editorGeometry };
+// ---------- studio profiles ----------
+// A profile is the look of a video, never a dataset: applying one changes settings only, keeps the
+// loaded data, the replay position and (unless asked) the map frame, and re-prepares the basemap
+// only when the layers or the output size really changed (the existing bake key decides).
+const profileStore = createProfileStore(
+  (() => { try { return window.localStorage; } catch { return null; } })(),
+);
+
+/** The current composition as profile settings (the map frame only when `includeFrame`). */
+function captureProfile({ includeFrame = false } = {}) {
+  return captureSettings(
+    {
+      format: state.format,
+      quality: state.quality,
+      mapLayers: state.mapLayers,
+      overlays: state.overlays,
+      overlayLayouts: state.layouts.toJSON(),
+      hudShading: state.shading,
+      grid: state.grid,
+      replay: { duration: $("duration").value, trailMinutes: $("trail").value, markerScale: $("scale").value, showHistory: $("history").checked },
+      frame: state.dataset ? state.frame : null,
+    },
+    { includeFrame },
+  );
+}
+
+/**
+ * Apply a profile in one coordinated step. The settings are validated first; after that everything
+ * is committed synchronously (no awaits), so nothing can observe a half-applied profile. Returns a
+ * sentence for the user about what happened to the map.
+ */
+function applyProfile(profile, { restoreFrame = false } = {}) {
+  const s = normalizeProfileSettings(profile.settings);
+  const before = captureProfile();
+  const wasFormat = state.format, wasLocked = state.mode === "locked";
+  setEditing(false); // Edit Layout shows the layout being replaced
+
+  state.mapLayers = s.mapLayers;
+  state.overlays = s.overlays;
+  state.layouts = createLayoutStore(s.overlayLayouts);
+  state.shading = s.hudShading;
+  state.grid = { ...s.grid };
+  $("duration").value = s.replay.duration;
+  $("trail").value = s.replay.trailMinutes;
+  $("scale").value = s.replay.markerScale;
+  $("history").checked = s.replay.showHistory;
+  state.format = s.format;
+  state.quality = s.quality;
+
+  syncLayerControls();
+  syncOverlayControls();
+  syncShadingControls();
+  syncGridControls();
+  syncFormatControls();
+  const vp = viewport(), o = outSize();
+  state.composer?.setViewport(vp.width, vp.height);
+  state.composer?.setLayers(state.mapLayers);
+  updateHud();
+  formatNote("");
+
+  if (!state.dataset) return "It will be used once a dataset is loaded.";
+  const formatChanged = s.format !== wasFormat;
+  let frameNote = "Map frame kept.";
+  if (restoreFrame && s.frame) {
+    state.frame = s.frame;
+    frameNote = "Saved map frame restored.";
+  } else if (formatChanged && state.frame) {
+    state.frame = containFrame(state.frame, o.width, o.height);
+    frameNote = `Map frame kept, adapted to ${FORMATS[s.format].ratio}.`;
+  }
+  const frameMoved = restoreFrame && !!s.frame || formatChanged;
+  if (frameMoved) {
+    // A prepared map belongs to one frame and one shape: back to editing, locked again by the user.
+    enterCompose(state.frame);
+    return wasLocked ? `${frameNote} The frame is unlocked: lock it to prepare the map at ${o.width} × ${o.height}.` : frameNote;
+  }
+  const replayChanged = JSON.stringify([before.replay, before.grid]) !== JSON.stringify([s.replay, s.grid]) || before.quality !== s.quality;
+  if (replayChanged) rebuild();
+  else {
+    state.model.settings.overlays = state.overlays;
+    applyLayout();
+  }
+  if (state.mode === "locked") {
+    const key = bakeKey();
+    scheduleRebake(); // a no-op when the layers and size are the same as the prepared (or preparing) map
+    return state.mapImage?.bakeKey === key || (state.mapBusy && state.bakingKey === key) ? `${frameNote} Map unchanged.` : `${frameNote} Updating the map…`;
+  }
+  return frameNote;
+}
+
+profilesUi = createProfilesUi({ $, store: profileStore, capture: captureProfile, apply: applyProfile });
+
+window.__studio = { profileStore, captureProfile, applyProfile, state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame, setLayers, bakeMap, setFormat, setQuality, setOverlays, setShading, setEditing, editor, editorGeometry };

@@ -236,3 +236,18 @@ tr.selected td { background: rgba(255, 138, 61, 0.14); color: var(--ink); }
 .seg.compact button { padding: 4px; flex-direction: row; }
 #shading { width: 100%; accent-color: var(--signal); }
 @media (max-width: 900px) { .readout { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; } }
+
+/* Studio profiles */
+.profile-pick select { flex: 2; }
+.profile-links { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 8px 0 2px; }
+.profile-links .linkbtn { margin-left: 0; }
+.profile-links .linkbtn:disabled { opacity: 0.4; cursor: default; text-decoration: none; }
+.profile-form { margin: 8px 0; padding: 8px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; }
+.profile-form .note { margin-top: 0; color: var(--ink); }
+.profile-form input[type="text"] { width: 100%; margin-bottom: 8px; }
+.profile-form[hidden], .profile-form input[hidden] { display: none; }
+button.danger { background: var(--danger); color: #fff; }
+#profile-state.ok { color: var(--signal); }
+#profile-state.bad { color: var(--danger); }
+#profile-state.warn { color: var(--accent); }
+#profile-state:empty { display: none; }
