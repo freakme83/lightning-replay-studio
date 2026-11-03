@@ -242,12 +242,12 @@ test("U4. hostile names stay text; bad imports are refused without changing anyt
     await new Promise((r) => setTimeout(r, 200));
     return { options: document.querySelectorAll("#profile-select option").length, state: document.getElementById("profile-state").textContent, bad: document.getElementById("profile-state").classList.contains("bad") };
   }, text);
-  for (const bad of ["{ nope", "[1,2]", JSON.stringify({ schemaVersion: 9, settings: {} }), "x".repeat(300 * 1024)]) {
+  for (const bad of ["{ nope", "[1,2]", JSON.stringify({ schemaVersion: 1, name: "no marker", settings: {} }), JSON.stringify({ schemaVersion: 9, settings: {} }), "x".repeat(300 * 1024)]) {
     const r = await importText(bad);
     assert.equal(r.options, 2, "list unchanged");
     assert.ok(r.bad, `refused: ${bad.slice(0, 20)}`);
   }
-  const ok = await importText(JSON.stringify({ schemaVersion: 1, name: "Imported <b>look</b>", settings: { format: "square", hudShading: 0.25 } }));
+  const ok = await importText(JSON.stringify({ kind: "lightning-replay-studio-profile", schemaVersion: 1, name: "Imported <b>look</b>", settings: { format: "square", hudShading: 0.25 } }));
   assert.equal(ok.options, 3);
   assert.equal(await page.$eval("#profile-select", (s) => s.selectedOptions[0].text), "Imported <b>look</b>");
   assert.equal((await snapshot(page)).format, "landscape", "importing never applies by itself");
@@ -283,4 +283,51 @@ test("U5. with browser storage blocked or damaged the Studio still works", { tim
   assert.equal((await snapshot(damaged)).events, 200);
   assert.deepEqual(damaged.errors, []);
   await damaged.close();
+});
+
+test("U6. Update can drop a saved map frame; the restore-frame choice resets with every selection", { timeout: 120000 }, async () => {
+  const page = await studio();
+  await loadSample(page, "istanbul");
+  const profiles = () => page.evaluate(() => window.__studio.profileStore.list().map((p) => ({ name: p.name, frame: !!p.settings.frame })));
+  const select = (index) => page.evaluate((i) => { const s = document.getElementById("profile-select"); s.selectedIndex = i; s.dispatchEvent(new Event("change", { bubbles: true })); }, index);
+  const restore = () => page.$eval("#profile-restore-frame", (c) => c.checked);
+
+  await page.click("#profile-save-frame");
+  await saveAs(page, "Framed");
+  await page.click("#profile-save-frame"); // back to unticked for the next save
+  await saveAs(page, "Plain");
+  assert.deepEqual(await profiles(), [{ name: "Framed", frame: true }, { name: "Plain", frame: false }]);
+
+  // Update opens with the box showing what the profile has; unticking it really removes the frame.
+  await select(1);
+  await page.click('#profile-update');
+  assert.equal(await page.$eval("#profile-save-frame", (c) => c.checked), true, "the form shows the profile's saved frame");
+  await page.click("#profile-save-frame");
+  await page.click("#profile-ok");
+  assert.deepEqual(await profiles(), [{ name: "Framed", frame: false }, { name: "Plain", frame: false }], "frame removed");
+  // Ticking it again saves the current frame; leaving it ticked keeps one.
+  await page.click("#profile-update");
+  await page.click("#profile-save-frame");
+  await page.click("#profile-ok");
+  assert.equal((await profiles())[0].frame, true);
+  await page.click("#profile-update");
+  assert.equal(await page.$eval("#profile-save-frame", (c) => c.checked), true);
+  await page.click("#profile-ok");
+  assert.equal((await profiles())[0].frame, true, "kept when left ticked");
+
+  // Restore choice: never carried from one selection to the next.
+  await select(1);
+  assert.equal(await page.$eval("#profile-restore-row", (r) => r.hidden), false);
+  await page.click("#profile-restore-frame");
+  assert.equal(await restore(), true);
+  await select(2);
+  assert.equal(await page.$eval("#profile-restore-row", (r) => r.hidden), true, "a profile without a frame offers nothing");
+  await select(1);
+  assert.equal(await restore(), false, "back on the framed profile it is unchecked again");
+  await page.click("#profile-restore-frame");
+  await select(0);
+  await select(1);
+  assert.equal(await restore(), false, "also after clearing the selection");
+  assert.deepEqual(page.errors, []);
+  await page.close();
 });

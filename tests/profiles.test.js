@@ -111,12 +111,12 @@ test("P5. invalid and hostile imports are rejected with a clear message and chan
   bad("[]", /not a Studio profile/);
   bad("null", /not a Studio profile/);
   bad('"a string"', /not a Studio profile/);
-  bad("{}", /schema version/);
-  bad(JSON.stringify({ schemaVersion: 1, name: "x" }), /no settings/);
-  bad(JSON.stringify({ schemaVersion: 1, settings: [] }), /no settings/);
-  bad(JSON.stringify({ schemaVersion: 99, settings: {} }), /newer Studio/);
+  bad(JSON.stringify({ kind: PROFILE_FILE_KIND }), /schema version/);
+  bad(JSON.stringify({ kind: PROFILE_FILE_KIND, schemaVersion: 1, name: "x" }), /no settings/);
+  bad(JSON.stringify({ kind: PROFILE_FILE_KIND, schemaVersion: 1, settings: [] }), /no settings/);
+  bad(JSON.stringify({ kind: PROFILE_FILE_KIND, schemaVersion: 99, settings: {} }), /newer Studio/);
   bad(JSON.stringify({ kind: "something-else", schemaVersion: 1, settings: {} }), /not a Studio profile/);
-  bad(JSON.stringify({ schemaVersion: 1, name: "x".repeat(PROFILE_LIMITS.maxBytes), settings: {} }), /too large/);
+  bad(JSON.stringify({ kind: PROFILE_FILE_KIND, schemaVersion: 1, name: "x".repeat(PROFILE_LIMITS.maxBytes), settings: {} }), /too large/);
   bad("é".repeat(PROFILE_LIMITS.maxBytes / 2 + 1), /too large/); // measured in bytes, not characters
   const store = createProfileStore(memoryStorage());
   assert.throws(() => store.importText("{"), ProfileError);
@@ -258,12 +258,18 @@ test("P11. a profile never contains dataset content, and the map frame is saved 
   assert.equal("frame" in withoutFrame.settings, false);
 });
 
-test("P12. backward compatibility: a minimal or older profile applies with today's defaults", () => {
-  const older = JSON.stringify({
+test("P12. backward compatibility: a minimal or older stored profile applies with today's defaults", () => {
+  const older = ({
     schemaVersion: 1, id: "old-1", name: "From an older Studio", createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-02T00:00:00Z",
     settings: { format: "square", mapLayers: { roadsMajor: { visible: false } }, retiredOption: true }, // no water appearance, no layouts, no replay timing
   });
-  const p = parseProfileText(older);
+  // Profiles already in localStorage were saved without a file "kind" marker and must keep loading.
+  const storage = memoryStorage();
+  storage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ schemaVersion: 1, profiles: [older], activeId: "old-1" }));
+  const store = createProfileStore(storage);
+  assert.equal(store.status().skipped, 0);
+  assert.equal(store.activeId(), "old-1");
+  const p = store.get("old-1");
   assert.equal(p.id, "old-1");
   assert.equal(p.settings.format, "square");
   assert.equal(p.settings.quality, "hd");
@@ -306,4 +312,21 @@ test("P13. preview and export read the same settings: the replay and the composi
     rmSync(dir, { recursive: true, force: true });
   }
   assert.ok(buildReplay(ds, { ...flat, frame }, {}).settings.showGrid);
+});
+
+test("P14. importing requires the export's kind marker; stored profiles without it still load", () => {
+  const exported = serializeProfile(normalizeProfile({ schemaVersion: 1, name: "Marked", settings: captureSettings(composition()) }));
+  assert.equal(parseProfileText(exported).name, "Marked");
+  const body = JSON.parse(exported);
+  const refuse = (data, label) => assert.throws(() => parseProfileText(JSON.stringify(data)), (e) => e instanceof ProfileError && /kind/.test(e.message), label);
+  const { kind, ...unmarked } = body;
+  refuse(unmarked, "marker missing");
+  refuse({ ...body, kind: "something-else" }, "marker different");
+  refuse({ ...body, kind: null }, "marker null");
+  refuse({ ...body, kind: ["lightning-replay-studio-profile"] }, "marker not a string");
+  assert.throws(() => createProfileStore(memoryStorage()).importText(JSON.stringify(unmarked)), ProfileError);
+  // The same record, read from storage rather than a file, is fine: storage is the Studio's own.
+  const storage = memoryStorage();
+  storage.setItem(PROFILE_STORAGE_KEY, JSON.stringify({ schemaVersion: 1, profiles: [unmarked] }));
+  assert.equal(createProfileStore(storage).list().length, 1);
 });

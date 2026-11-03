@@ -24,6 +24,7 @@ export function createProfilesUi({ $, store, capture, apply }) {
     el.select.replaceChildren(new Option(list.length ? "Choose a profile…" : "No profiles yet", ""));
     for (const p of list) el.select.add(new Option(p.name, p.id));
     el.select.value = list.some((p) => p.id === keepId) ? keepId : "";
+    el.restoreFrame.checked = false; // restoring a frame is a choice made per selection, never carried over
   }
 
   /** The "modified" badge: do the current settings differ from the selected profile? (The map frame is ignored.) */
@@ -78,7 +79,7 @@ export function createProfilesUi({ $, store, capture, apply }) {
         fillSelect(created.id);
         say(`Saved “${created.name}”${created.settings.frame ? " with its map frame" : ""}.`, "ok");
       } else if (mode === "update" && p) {
-        const updated = store.update(p.id, capture({ includeFrame: el.saveFrame.checked || !!p.settings.frame }));
+        const updated = store.update(p.id, capture({ includeFrame: el.saveFrame.checked }));
         fillSelect(updated.id);
         say(`Updated “${updated.name}”.`, "ok");
       } else if (mode === "rename" && p) {
@@ -140,7 +141,7 @@ export function createProfilesUi({ $, store, capture, apply }) {
     refresh();
   }
 
-  el.select.addEventListener("change", () => { closeForm(); say(""); refresh(); });
+  el.select.addEventListener("change", () => { el.restoreFrame.checked = false; closeForm(); say(""); refresh(); });
   el.apply.addEventListener("click", applySelected);
   el.save.addEventListener("click", () => openForm("save"));
   el.update.addEventListener("click", () => openForm("update"));

@@ -165,7 +165,9 @@ export function parseProfileText(text, opts) {
   } catch {
     throw new ProfileError("The file is not valid JSON.");
   }
-  if (data && typeof data === "object" && "kind" in data && data.kind !== PROFILE_FILE_KIND) throw new ProfileError("This JSON file is not a Studio profile.");
+  // Files must carry the marker Export writes. (Profiles already in localStorage have none and are read by normalizeProfile directly.)
+  if (!data || typeof data !== "object" || Array.isArray(data) || data.kind !== PROFILE_FILE_KIND)
+    throw new ProfileError("This JSON file is not a Studio profile export (its \"kind\" marker is missing or different).");
   return normalizeProfile(data, opts);
 }
 
