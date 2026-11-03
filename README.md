@@ -294,6 +294,35 @@ gets its own soft local backing instead of a band. Shading never touches the map
 CLI: `--layout layout.json` (an overlay layout, plain or keyed by format, e.g.
 `{"portrait": {"activity": {"x": 0.5, "y": 0.865, "scale": 0.85}}}`) and `--shading off|subtle|standard|0…1`.
 
+## Save and reuse a composition (Studio profiles)
+
+The **Studio profiles** section (top of the sidebar) saves the *look* of a video and restores it with one click, on any dataset.
+**Save as…** names the current settings; pick a profile and **Apply** to bring it back. **Update** replaces a profile with the current
+settings (after a confirmation), and **Rename · Duplicate · Delete · Export · Import** manage them. A *modified* badge shows when the
+current settings differ from the selected profile. A name that is already taken is refused: nothing is overwritten silently.
+
+![studio profiles](docs/studio-profiles.jpg)
+
+What a profile holds: video format and quality · every map layer (visibility, opacity, label case) · water colour, brightness and
+opacity · all informational overlays · the overlay layout (position, scale, lock) of **all three formats** · HUD shading · grid ·
+video duration, trail duration, marker size and Keep faint dots. It never holds a dataset, strikes, the playback position, the
+selected strike, a basemap image or a video, and it does not store the event time range (that belongs to a dataset).
+
+**Map frame.** A profile is reusable across datasets, so applying it keeps the area you are looking at (adapted to the profile's
+aspect ratio, the same way the format buttons do). Tick **Save the map frame too** when saving to store the geographic frame as
+well; such a profile offers **Also restore its saved map frame** when applied, off by default. Loaded data is never replaced.
+
+**Applying** is one coordinated step: the profile is validated, committed in one go, and every control is updated. The replay
+position is kept. A locked frame stays locked and the basemap is prepared again only if the map layers or the output size really
+changed (a change of format leaves the locked frame, as the format buttons do). Overlay, layout, shading, grid and timing changes
+never re-prepare the map.
+
+**Storage and files.** Profiles are kept in the browser's `localStorage` under `lightning-replay-studio:profiles` (survives reloads and
+restarts, and is not shared between browsers). Export writes a small versioned JSON file
+(`{ "kind": "lightning-replay-studio-profile", "schemaVersion": 1, "id", "name", "createdAt", "updatedAt", "settings" }`); Import
+validates it (size limit 256 KB, unknown fields dropped, values clamped, newer schemas refused), gives it a fresh id and a free
+name, and never applies it by itself. If browser storage is blocked, profiles live for the session only and the panel says so.
+
 ## Preview an event
 
 - Press **Play** or hit `Space` to play. Drag the scrubber to move freely. When paused, the preview snaps to the
@@ -401,6 +430,13 @@ Focused tests (`npm run test:map` runs only the map ones):
 45. Per-format layout store: isolation, lock, Reset selected / Reset layout, Hide all keeps positions.
 S1–S4. Playback scroll stability: strike-row following scrolls only the table container, pauses after manual table scrolling,
     never calls `scrollIntoView`, and leaves the browser page's scroll untouched in a real browser.
+P1–P13 (`tests/profiles.test.js`). Studio profiles: versioned JSON round trip; all settings captured (all three formats' layouts,
+    water, layers); invalid, hostile and oversize imports; normalization and backward compatibility; names as untrusted text;
+    save / update / rename / duplicate / delete without silent overwrite; reload; blocked or damaged storage; no dataset content and
+    the map frame only on request; preview and export read identical settings.
+U1–U5 (`tests/profiles-ui.test.js`, headless Chrome on the real Studio, bake endpoint stubbed and counted). Save → reload → another
+    dataset → one Apply restores everything and keeps the data and map area; no redundant map bakes; optional saved frame;
+    hostile names, bad imports and delete confirmation; blocked or damaged storage.
 6g. An exported MP4 reproduces a custom overlay position, scale and shading, with no editor marks.
 
 ## Project layout
@@ -411,6 +447,7 @@ src/core/            parse.js · timeline.js · projection.js · replay.js · fo
                      shared by the preview AND the exported video (copied byte-identical)
 src/map/             providers.js (map provider + dark style tuning + offline style) · layers.js (layer groups) · render-basemap.js (headless bake)
 src/editor/          layout-edit.js (layout editor geometry: coordinates, snapping, scaling, per-format store)
+src/profiles/        profile.js (schema, validation, import/export) · profile-store.js (localStorage store)
 src/export/          composition.js (writes the HyperFrames project) · render.js (render + ffprobe)
 server.js            local server: static files + /api/basemap + /api/export
 scripts/             render.js (CLI) · generate-sample.js · contact-sheet.js · build-basemap.js
