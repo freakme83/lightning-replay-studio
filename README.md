@@ -3,6 +3,7 @@
 A local tool that turns a timestamped lightning-strike dataset (CSV or JSON) into a
 geographically accurate, time-compressed storm replay. You can preview it interactively
 and export it as an H.264 MP4 through the local [HyperFrames](https://github.com/heygen-com/hyperframes) renderer.
+The **Sound** tab turns the same strikes into music (the Lightning Sound Lab engine), frame-exact with the replay.
 
 Everything runs on your Mac. There are no API keys, no accounts and no cloud rendering. The only network access is
 fetching free [OpenFreeMap](https://openfreemap.org) vector tiles once when you lock a map frame; the HyperFrames
@@ -332,6 +333,43 @@ name, and never applies it by itself. If browser storage is blocked, profiles li
 - `[` and `]` step to the previous or next strike. `←` and `→` step one frame at a time.
 - Use the search box to filter strikes by id, local time or type.
 
+## Add sound (Sound tab)
+
+The **Video | Sound** switch at the top swaps the sidebar. The **Video** tab is everything above; the **Sound** tab turns
+the loaded strikes into music with the Lightning Sound Lab engine. The preview, the transport and the dataset are
+shared, so you always hear the replay you see. Sound is **off** until you tick *Play sound with the replay* (or press the
+🔇 / 🔊 button next to the scrubber); a dot on the Sound tab shows it is on.
+
+- **Frame-exact.** Every note starts on the first video frame that shows its strike's flash: the note time is that
+  frame's time, `frameOf(v, fps) / fps`, from the replay's own time map (`src/core/timeline.js`). Strikes on the same
+  frame sound together, strikes outside the event time range are silent, and changing the video duration re-times the
+  notes exactly like the flashes. Nothing in the Sound tab can change the replay, the strikes or their times.
+- **Preview clock.** While sound is on and playing, the audio clock drives the preview: the picture shows the moment you
+  *hear*, with the device's output latency (also Bluetooth) and the safety limiter's small look-ahead (about 11 ms, measured
+  at start) taken into account. Without sound the preview runs as before.
+- **Playing in the Sound tab** also works while the map frame is still being composed (the Video tab needs a locked frame).
+  Switching back to the Video tab with an unlocked frame pauses.
+- **Note source.** *Geographic*: latitude chooses the note (north = higher, on the scale ladder set by Scale, Key, Pitch height
+  and Pitch range), longitude the stereo position (west = left, at most ±80 %). *Random notes*: each strike picks a note from
+  its own seeded random numbers.
+- **Listening area** (Geographic): the rectangle cut into note bands. *Data area* is the dataset's own capture area
+  (`meta.bounds` / `bbox` / `area`, or `centerLat` + `centerLon` + `sideKm` / `radiusKm` as in Blitzortung captures) or, when it
+  has none, an area suggested once from all its strikes; panning the map never changes it. *Map frame* is the video's frame:
+  the top edge of the picture is the highest note and the left edge the left ear; it follows the frame you set in the Video
+  tab (lock the frame to fix it). The panel shows the area, its size and how many km one note covers.
+- **Variation** (Geographic in Musical mode): *Strict* plays every strike's note exactly; *Natural* varies loudness and length of
+  repeated notes; *Rich* adds a quiet chord-tone "shadow" note below some repeats, using spare voices only.
+- **Sound character.** Musical or Raw listening mode, four synthesised instruments, eight scales, twelve keys, note length,
+  pitch height and range, reverb, maximum notes at once, volume, and six starting points. **A / B** are two complete sound
+  settings for the same strikes: switch while it plays to compare.
+- **Repeatable.** Loudness is not in the data, so every strike gets a seeded random strength once per dataset (seeded by the
+  strikes' times and positions) and keeps it in any duration or time range. Same data and settings = the same notes.
+- **No timing pull.** Lightning Sound Lab's *Timing pull* (which delays Random Notes by up to 0.12 s) is always off here,
+  because it would move notes off their strikes' frames.
+- **Density guard.** At most 60 notes start per second; strikes held back are counted under the plot (they still flash).
+- The sound settings are kept in the browser (`localStorage`, key `lightning-replay-studio:sound`). This version plays the sound
+  in the preview; the exported MP4 is still silent.
+
 ## Export a new MP4
 
 **From the app.** Choose the format and quality, lock the frame and click **Export MP4**. The render runs locally, and a
@@ -439,16 +477,24 @@ U1–U6 (`tests/profiles-ui.test.js`, headless Chrome on the real Studio, bake e
     hostile names, bad imports and delete confirmation; blocked or damaged storage; Update dropping a saved frame and the
     restore-frame choice resetting with each selection.
 6g. An exported MP4 reproduces a custom overlay position, scale and shading, with no editor marks.
+SL1–SL9 (`tests/sound.test.js`, audio rendered offline with `node-web-audio-api`). Sound tab: every note starts on its strike's
+    first visible frame, in every mode, and the audio is silent before it; timing follows the replay's time map while each strike
+    keeps its voicing; listening area from metadata, suggestion or map frame; latitude → note and longitude → pan in either area;
+    clean audio and voice limits for every instrument; Natural / Rich variation rules; determinism and A/B; the live player's
+    scheduling and heard position; sound settings validation and storage.
 
 ## Project layout
 
 ```
 app/                 interactive preview (HTML/CSS/JS, no build step) · composer.js (Map Composer) · layout-editor.js (Edit layout)
+                     sound-tab.js (Sound tab) · sound-viz.js · sound-geoviz.js (its plots)
 src/core/            parse.js · timeline.js · projection.js · replay.js · format.js · layout.js · overlays.js · hud.js · draw.js
                      shared by the preview AND the exported video (copied byte-identical)
 src/map/             providers.js (map provider + dark style tuning + offline style) · layers.js (layer groups) · render-basemap.js (headless bake)
 src/editor/          layout-edit.js (layout editor geometry: coordinates, snapping, scaling, per-format store)
 src/profiles/        profile.js (schema, validation, import/export) · profile-store.js (localStorage store)
+src/sound/           the Sound tab engine (from Lightning Sound Lab): music.js · synth.js · performer.js · geo.js
+                     events.js (replay strikes → frame-exact notes) · area.js (listening area) · render.js · player.js · settings.js
 src/export/          composition.js (writes the HyperFrames project) · render.js (render + ffprobe)
 server.js            local server: static files + /api/basemap + /api/export
 scripts/             render.js (CLI) · generate-sample.js · contact-sheet.js · build-basemap.js
