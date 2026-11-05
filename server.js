@@ -10,6 +10,7 @@ import { readdirSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { join, extname, normalize, sep } from "node:path";
 import { buildComposition, layersMismatch, ROOT } from "./src/export/composition.js";
 import { renderComposition, probeVideo, checkVideo, tagCredits } from "./src/export/render.js";
+import { exportSound, muxSound, renderExportSound, soundProblem } from "./src/export/sound.js";
 import { attributionLines } from "./src/core/overlays.js";
 import { renderBasemap, MapPrepError } from "./src/map/render-basemap.js";
 import { normalizeSettings } from "./src/core/replay.js";
@@ -128,14 +129,18 @@ function resolveExportMap(map) {
   throw new Error("No map prepared for this frame. Lock the frame (needs internet for map tiles), or tick “Use offline outline map” to export with the Natural Earth fallback.");
 }
 
-async function startExport({ text, filename, settings, encode, map }) {
+async function startExport({ text, filename, settings, encode, map, sound: soundRequest }) {
   if (running) throw new Error("An export is already running. Wait for it to finish.");
   const mapImage = resolveExportMap(map);
   const id = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   // Validate the settings first: the file name and the encoder preset come from the normalised size.
   const planned = normalizeSettings(settings);
-  const name = `${safeName(filename)}-${planned.format}-${planned.width}x${planned.height}-${planned.duration}s-${id}.mp4`;
-  const job = { id, status: "building", log: "", output: `/exports/${name}`, startedAt: Date.now(), probe: null, problems: null, error: null };
+  // Sound (the Sound tab's settings, or nothing for a silent video) is checked before anything is rendered.
+  const sound = exportSound(soundRequest);
+  const problem = soundProblem(planned.duration, sound);
+  if (problem) throw new Error(problem);
+  const name = `${safeName(filename)}-${planned.format}-${planned.width}x${planned.height}-${planned.duration}s${sound ? "-sound" : ""}-${id}.mp4`;
+  const job = { id, status: "building", log: "", output: `/exports/${name}`, startedAt: Date.now(), probe: null, problems: null, error: null, sound: null };
   jobs.set(id, job);
   const workDir = join(ROOT, "work", `export-${id}`);
   const outFile = join(ROOT, "exports", name);
@@ -146,18 +151,30 @@ async function startExport({ text, filename, settings, encode, map }) {
   running = job;
   job.status = "rendering";
   job.settings = model.settings;
+  const log = (l) => { job.log = (job.log + l).slice(-20000); };
+  // The sound renders while HyperFrames renders the picture; both come from the same replay model.
+  const soundJob = sound
+    ? renderExportSound({ model, dataset, sound }).then((r) => { log(`sound: ${r.summary.flashes} flashes, ${r.summary.notes} notes (${r.summary.chordNotes} chord notes), aligned by ${r.summary.alignedMs} ms\n`); return r; })
+    : Promise.resolve(null);
+  soundJob.catch(() => {}); // reported below, after the picture
   renderComposition({
     dir: workDir,
     output: outFile,
     fps: model.settings.fps,
     // Draft uses the fast encoder preset; Full HD the CRF-based "looks" preset. `encode` overrides (CLI-style).
     quality: ["draft", "looks", "delivery"].includes(encode) ? encode : QUALITIES[model.settings.quality]?.encode ?? "looks",
-    onLog: (l) => { job.log = (job.log + l).slice(-20000); },
+    onLog: log,
   })
-    .then(() => {
+    .then(async () => {
+      const audio = await soundJob;
+      if (audio) {
+        job.status = "sound";
+        muxSound(outFile, audio, model.settings.duration);
+        job.sound = audio.summary;
+      }
       tagCredits(outFile, credits);
       job.probe = probeVideo(outFile);
-      job.problems = checkVideo(job.probe, model.settings);
+      job.problems = checkVideo(job.probe, model.settings, { sound: !!audio });
       job.status = "done";
       rmSync(workDir, { recursive: true, force: true });
     })

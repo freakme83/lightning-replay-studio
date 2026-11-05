@@ -18,6 +18,10 @@
 //          --quality hd|draft   resolution: hd = Full HD (1920×1080, 1080×1920, 1080×1080), draft = half (default hd)
 //          --width <px> --height <px>   explicit size instead of --format/--quality (advanced)
 //          --encode draft|looks|delivery   x264 preset override (default: draft for --quality draft, else looks, CRF-based)
+//          --sound [settings.json]   add the Sound tab's music (AAC 256 kbit/s, 48 kHz stereo, up to 10 minutes):
+//                   bare = default sound (slot A, Geographic, glass); a file = the Sound tab's settings as JSON, or a
+//                   Studio profile export (its sound settings are used); sound is switched on either way
+//          --sound-area data|frame   listening area for Geographic notes (overrides the settings)
 //          --keep (keep work dir)
 // Without --frame/--bounds the frame is fitted to the data (Fit to Data). The online map is
 // prepared once (needs internet); if that fails the export stops, use --outline to proceed.
@@ -33,8 +37,15 @@ import { buildReplay } from "../src/core/replay.js";
 import { renderBasemap } from "../src/map/render-basemap.js";
 import { QUALITIES, designViewport } from "../src/core/format.js";
 import { normalizeLayers, parseLayerSpec } from "../src/map/layers.js";
+import { exportSound, muxSound, renderExportSound, soundProblem } from "../src/export/sound.js";
+import { defaultSoundSettings } from "../src/sound/settings.js";
+import { PROFILE_FILE_KIND, parseProfileText } from "../src/profiles/profile.js";
+
+// `--sound` may stand alone or take a settings file: give a bare one an explicit value parseArgs understands.
+const argv = process.argv.slice(2).map((a, i, all) => (a === "--sound" && (i + 1 >= all.length || all[i + 1].startsWith("-")) ? "--sound=default" : a));
 
 const { values, positionals } = parseArgs({
+  args: argv,
   allowPositionals: true,
   options: {
     output: { type: "string", short: "o" },
@@ -60,6 +71,8 @@ const { values, positionals } = parseArgs({
     quality: { type: "string" },
     encode: { type: "string" },
     keep: { type: "boolean", default: false },
+    sound: { type: "string" },
+    "sound-area": { type: "string" },
   },
 });
 
@@ -104,6 +117,33 @@ if (values.frame) settings.frame = box(values.frame);
 if (values.start || values.end) settings.timeRange = { start: values.start ?? null, end: values.end ?? null };
 const text = readFileSync(input, "utf8");
 
+/** The sound the command line asks for (see --sound), or null for a silent video. */
+function cliSound() {
+  if (values.sound === undefined) return null;
+  let settings = defaultSoundSettings();
+  if (values.sound !== "default") {
+    const raw = readFileSync(values.sound, "utf8");
+    const json = JSON.parse(raw);
+    if (json?.kind === PROFILE_FILE_KIND) {
+      const profile = parseProfileText(raw);
+      if (!profile.settings.sound) throw new Error(`${values.sound} is a Studio profile without sound settings.`);
+      settings = profile.settings.sound;
+    } else settings = json;
+  }
+  if (values["sound-area"] !== undefined) {
+    if (!["data", "frame"].includes(values["sound-area"])) throw new Error("--sound-area must be data or frame.");
+    settings = { ...settings, area: values["sound-area"] };
+  }
+  return exportSound({ ...settings, enabled: true });
+}
+let sound;
+try {
+  sound = cliSound();
+} catch (e) {
+  console.error(`Sound settings: ${e.message}`);
+  process.exit(2);
+}
+
 let mapImage = null;
 if (!values.outline) {
   // Same frame the composer's Fit to Data / bounds would give: the v1 layout's full-canvas extent.
@@ -130,18 +170,32 @@ const workDir = join(ROOT, "work", `cli-${basename(output, ".mp4")}`);
 
 const t0 = Date.now();
 const { model, dataset } = buildComposition({ text, filename: basename(input), settings, outDir: workDir, mapImage });
+const soundIssue = soundProblem(model.settings.duration, sound);
+if (soundIssue) {
+  console.error(soundIssue);
+  process.exit(2);
+}
 for (const w of dataset.warnings) console.warn(`warning: ${w}`);
 if (dataset.errors.length) console.warn(`${dataset.errors.length} record(s) rejected, e.g. ${dataset.errors[0]}`);
 const s = model.settings;
 const encode = values.encode ?? QUALITIES[s.quality]?.encode ?? "looks";
 console.log(`${model.totalEvents} strikes, ${s.duration} s @ ${s.fps} fps, ${s.width}×${s.height} (${s.format}, ${s.quality}), encoder preset ${encode} → ${output}`);
 
+const soundJob = sound ? renderExportSound({ model, dataset, sound }) : Promise.resolve(null);
+soundJob.catch(() => {}); // awaited below
 await renderComposition({ dir: workDir, output, fps: s.fps, quality: encode, onLog: (l) => process.stdout.write(l) });
+const audio = await soundJob;
+if (audio) {
+  muxSound(output, audio, s.duration);
+  const m = audio.summary;
+  console.log(`\nsound: slot ${m.slot}, ${m.instrument}, ${m.noteMode} (${m.area} area), ${m.flashes} flashes, ${m.notes} notes + ${m.chordNotes} chord notes, aligned by ${m.alignedMs} ms`);
+}
 tagCredits(output, attributionLines({ mapAttribution: mapImage?.meta.attribution, outline: !mapImage, meta: dataset.meta }).join("\n"));
 const probe = probeVideo(output);
-const problems = checkVideo(probe, s);
-console.log(`\nffprobe: ${probe.codec} ${probe.width}×${probe.height} ${probe.fps} fps, ${probe.duration.toFixed(3)} s, ${probe.frames} frames, ${(probe.bytes / 1e6).toFixed(2)} MB`);
-console.log(problems.length ? `VERIFY FAILED: ${problems.join("; ")}` : "verify: OK (codec, size, fps, duration, frame count)");
+const problems = checkVideo(probe, s, { sound: !!audio });
+const a = probe.audio;
+console.log(`\nffprobe: ${probe.codec} ${probe.width}×${probe.height} ${probe.fps} fps, ${probe.duration.toFixed(3)} s, ${probe.frames} frames, ${a ? `${a.codec} ${a.sampleRate} Hz ${a.channels} ch ${audio ? audio.summary.bitrate : "?"}bit/s (average ${Math.round(a.bitRate / 1000)}k), ` : "no audio, "}${(probe.bytes / 1e6).toFixed(2)} MB`);
+console.log(problems.length ? `VERIFY FAILED: ${problems.join("; ")}` : `verify: OK (codec, size, fps, duration, frame count${audio ? ", audio" : ", silent"})`);
 console.log(`elapsed ${((Date.now() - t0) / 1000).toFixed(1)} s`);
 if (!values.keep) rmSync(workDir, { recursive: true, force: true });
 process.exit(problems.length ? 1 : 0);

@@ -306,7 +306,8 @@ current settings differ from the selected profile. A name that is already taken 
 
 What a profile holds: video format and quality · every map layer (visibility, opacity, label case) · water colour, brightness and
 opacity · all informational overlays · the overlay layout (position, scale, lock) of **all three formats** · HUD shading · grid ·
-video duration, trail duration, marker size and Keep faint dots. It never holds a dataset, strikes, the playback position, the
+video duration, trail duration, marker size and Keep faint dots · the Sound tab's settings (sound on/off, both A/B slots, which
+slot is heard, listening area). It never holds a dataset, strikes, the playback position, the
 selected strike, a basemap image or a video, and it does not store the event time range (that belongs to a dataset).
 
 **Map frame.** A profile is reusable across datasets, so applying it keeps the area you are looking at (adapted to the profile's
@@ -320,7 +321,7 @@ never re-prepare the map.
 
 **Storage and files.** Profiles are kept in the browser's `localStorage` under `lightning-replay-studio:profiles` (survives reloads and
 restarts, and is not shared between browsers). Export writes a small versioned JSON file
-(`{ "kind": "lightning-replay-studio-profile", "schemaVersion": 1, "id", "name", "createdAt", "updatedAt", "settings" }`); Import
+(`{ "kind": "lightning-replay-studio-profile", "schemaVersion": 2, "id", "name", "createdAt", "updatedAt", "settings" }`); Import
 validates it (it must carry the `kind` marker Export writes, size limit 256 KB, unknown fields dropped, values clamped, newer schemas refused), gives it a fresh id and a free
 name, and never applies it by itself. If browser storage is blocked, profiles live for the session only and the panel says so.
 
@@ -379,14 +380,32 @@ shared, so you always hear the replay you see. Sound is **off** until you tick *
   because it would move notes off their strikes' frames.
 - **Density guard.** At most 60 notes start per second. One flash per frame stays below that at up to 60 fps; above it, held-back
   flashes are counted under the plot. Chord notes give way first.
-- The sound settings are kept in the browser (`localStorage`, key `lightning-replay-studio:sound`). This version plays the sound
-  in the preview; the exported MP4 is still silent.
+- The sound settings are kept in the browser (`localStorage`, key `lightning-replay-studio:sound`) and in Studio profiles
+  (schema 2; a profile saved before sound existed loads with sound off and leaves the slots as they are).
+- **In the MP4.** With sound on, **Export … MP4 with sound** puts the music in the video: the heard slot, rendered on the server
+  with the same engine, as AAC-LC 48 kHz stereo at 256 kbit/s (see *Export a new MP4*).
 
 ## Export a new MP4
 
 **From the app.** Choose the format and quality, lock the frame and click **Export MP4**. The render runs locally, and a
 20 s Full HD video takes about 8 s on an M4. The finished file is checked with ffprobe (codec, size, fps, duration, frame
 count) and can be played and downloaded in the sidebar. Files are saved to `exports/`, named with the format and size.
+
+**With sound.** When sound is on in the Sound tab the button reads *Export … MP4 with sound* and the file name ends in `-sound`.
+The server renders the sound of the slot you hear with the Sound tab's own code (`node-web-audio-api`, the Web Audio API
+for Node) while HyperFrames renders the picture, then adds it with FFmpeg: the H.264 stream is copied untouched, the sound
+becomes AAC-LC, 48 kHz stereo, 256 kbit/s. It is the same sound as the preview: the same flashes (every frame that shows a new
+flash in the picture), the same notes and chords, the same fade-out, exactly as long as the video.
+- **Frame-exact.** The safety limiter's few milliseconds of look-ahead are measured and removed before encoding, and FFmpeg's
+  edit list removes the AAC encoder delay, so each note starts on the time of its flash's first frame (measured in a real MP4:
+  within half a millisecond).
+- **Checked.** The ffprobe check also covers the audio: AAC, 48 kHz, stereo, starting at 0 s and as long as the video (and, with
+  sound off, that there is no audio stream). The sidebar shows it with the number of flashes and notes. The bit rate shown is
+  the one requested; ffprobe's average is lower when the sound is sparse and quiet.
+- **Up to 10 minutes.** The whole sound is rendered at once, in memory (about 230 MB for 10 minutes), so videos with sound can
+  be at most 10 minutes long. A longer video can still be exported silent; the button says why it is blocked.
+- The browser and the server use different Web Audio implementations: notes, timing and the fade are identical, the timbre
+  can differ very slightly.
 
 **From the command line,** using the same pipeline:
 
@@ -415,6 +434,14 @@ Other CLI options: `--layers` (map layers, see above), `--overlays`, `--layout`,
 shading, see above), `--fps`, `--encode draft|looks|delivery` (x264 preset),
 `--width`/`--height` (an explicit size instead of `--format`/`--quality`, for advanced use), `--title`, `--keep` (keeps the
 generated HyperFrames project in `work/`).
+
+Sound options: `--sound` adds the default sound (slot A, Geographic, glass); `--sound settings.json` uses the Sound tab's
+settings from a file, either as stored by the Studio or a **Studio profile export** (its sound settings; sound is switched on
+either way); `--sound-area data|frame` overrides the listening area. Videos with sound can be at most 10 minutes.
+
+```bash
+npm run render -- data/sample-ankara-storm.json -o exports/ankara-sound.mp4 --duration 30 --sound my-look.studio-profile.json
+```
 
 To build a contact sheet from any MP4:
 
@@ -496,6 +523,11 @@ SL1–SL12 (`tests/sound.test.js`, audio rendered offline with `node-web-audio-a
     fade; settings; only strikes inside the picture are heard (the geographic rule equals the renderer's pixel rule, also
     zoomed, shifted and portrait); every flash frame is heard, also in a dense clustered storm and with 1–3 voices; the
     end fade (silent last samples, nothing audible changed before it, the video keeps its length).
+SE1–SE7 (`tests/sound-export.test.js`, SE3/SE4/SE7 render real MP4s; `npm run test:sound` runs SL and SE). Sound in exports: requests and
+    the 10-minute limit; the limiter delay is removed and the sound is exactly as long as the video; a real MP4 has AAC 48 kHz
+    stereo audio from 0 s, every flash is first drawn on its frame and its note starts on that frame's time after AAC encoding
+    and decoding; a silent export has no audio stream and the check notices either mistake; sample-identical repeat renders;
+    profiles (schema 2) carry the sound, schema 1 profiles load without it; the CLI with a profile file and the length limit.
 
 ## Project layout
 
@@ -509,7 +541,7 @@ src/editor/          layout-edit.js (layout editor geometry: coordinates, snappi
 src/profiles/        profile.js (schema, validation, import/export) · profile-store.js (localStorage store)
 src/sound/           the Sound tab engine (from Lightning Sound Lab): music.js · synth.js · performer.js · geo.js
                      events.js (replay strikes → frame-exact notes) · area.js (listening area) · render.js · player.js · settings.js
-src/export/          composition.js (writes the HyperFrames project) · render.js (render + ffprobe)
+src/export/          composition.js (writes the HyperFrames project) · render.js (render + ffprobe) · sound.js (export sound + mux)
 server.js            local server: static files + /api/basemap + /api/export
 scripts/             render.js (CLI) · generate-sample.js · contact-sheet.js · build-basemap.js
 basemap/             ne-50m.json (Natural Earth 1:50m coastlines/borders) · places.json (approx. reference places)

@@ -24,7 +24,27 @@ export function renderComposition({ dir, output, fps, quality = "looks", onLog =
   });
 }
 
-/** ffprobe summary of the first video stream. */
+/** ffprobe summary of the first audio stream, or null when the file has none. */
+export function probeAudio(file) {
+  const out = execFileSync("ffprobe", [
+    "-v", "error", "-select_streams", "a:0",
+    "-show_entries", "stream=codec_name,profile,sample_rate,channels,bit_rate,duration,start_time",
+    "-of", "json", file,
+  ]).toString();
+  const st = JSON.parse(out).streams?.[0];
+  if (!st) return null;
+  return {
+    codec: st.codec_name,
+    profile: st.profile,
+    sampleRate: Number(st.sample_rate),
+    channels: Number(st.channels),
+    bitRate: Number(st.bit_rate),
+    duration: Number(st.duration),
+    start: Number(st.start_time),
+  };
+}
+
+/** ffprobe summary of the first video stream (and of the audio stream in `audio`, null when silent). */
 export function probeVideo(file) {
   const out = execFileSync("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
@@ -44,11 +64,16 @@ export function probeVideo(file) {
     frames: Number(st.nb_frames),
     duration: Number(j.format.duration),
     bytes: Number(j.format.size),
+    audio: probeAudio(file),
   };
 }
 
-/** Compare a probe against the requested settings; returns a list of mismatches (empty = pass). */
-export function checkVideo(probe, { duration, fps, width, height }) {
+/**
+ * Compare a probe against the requested settings; returns a list of mismatches (empty = pass).
+ * `sound`: true = the file must carry the export's audio (AAC, 48 kHz stereo, as long as the video); false = it must be
+ * silent (no audio stream); undefined = audio is not checked.
+ */
+export function checkVideo(probe, { duration, fps, width, height }, { sound } = {}) {
   const problems = [];
   if (probe.codec !== "h264") problems.push(`codec ${probe.codec} ≠ h264`);
   if (probe.width !== width || probe.height !== height) problems.push(`size ${probe.width}×${probe.height} ≠ ${width}×${height}`);
@@ -56,6 +81,18 @@ export function checkVideo(probe, { duration, fps, width, height }) {
   if (Math.abs(probe.duration - duration) > 1 / fps + 0.01) problems.push(`duration ${probe.duration.toFixed(3)} s ≠ ${duration} s`);
   const expectedFrames = Math.round(duration * fps);
   if (Number.isFinite(probe.frames) && Math.abs(probe.frames - expectedFrames) > 1) problems.push(`frames ${probe.frames} ≠ ${expectedFrames}`);
+  const a = probe.audio;
+  if (sound === false && a) problems.push("an audio stream is present although sound was off");
+  if (sound === true) {
+    if (!a) problems.push("no audio stream");
+    else {
+      if (a.codec !== "aac") problems.push(`audio codec ${a.codec} ≠ aac`);
+      if (a.sampleRate !== 48000) problems.push(`audio ${a.sampleRate} Hz ≠ 48000 Hz`);
+      if (a.channels !== 2) problems.push(`audio ${a.channels} channels ≠ 2`);
+      if (Math.abs(a.duration - duration) > 0.03) problems.push(`audio duration ${a.duration.toFixed(3)} s ≠ ${duration} s`);
+      if (Math.abs(a.start) > 0.001) problems.push(`audio starts at ${a.start} s, not 0`);
+    }
+  }
   return problems;
 }
 

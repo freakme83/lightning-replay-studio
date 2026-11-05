@@ -12,7 +12,9 @@ import { soundEvents, strikeVoicing } from "/src/sound/events.js";
 import { endFade } from "/src/sound/render.js";
 import { SoundPlayer } from "/src/sound/player.js";
 import { MAX_STARTS_PER_SECOND } from "/src/sound/performer.js";
-import { STUDIO_A, STUDIO_B, defaultSoundSettings, loadSoundSettings, saveSoundSettings, studioMusic } from "/src/sound/settings.js";
+import {
+  STUDIO_A, STUDIO_B, defaultSoundSettings, loadSoundSettings, sanitizeSoundSettings, saveSoundSettings, studioMusic,
+} from "/src/sound/settings.js";
 import { drawViz } from "./sound-viz.js";
 import { drawGeo } from "./sound-geoviz.js";
 
@@ -139,7 +141,7 @@ const VIZ_HTML = `
  * @param {Storage|null} o.storage browser storage for the settings
  * @param {(enabled: boolean) => void} o.onEnabledChange sound switched on / off
  */
-export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
+export function createSoundTab({ panel, viz, storage, onEnabledChange, onChange = () => {} }) {
   panel.innerHTML = PANEL_HTML;
   viz.innerHTML = VIZ_HTML;
   const $ = (id) => document.getElementById(id);
@@ -171,6 +173,20 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
 
   function persist() {
     stored = saveSoundSettings(storage, s);
+    onChange();
+  }
+
+  /** Replaces all sound settings at once (a Studio profile). Sound on/off is reported like a click on the switch. */
+  function applySettings(next) {
+    const n = sanitizeSoundSettings(next);
+    const was = s.enabled;
+    Object.assign(s, { enabled: n.enabled, active: n.active, slots: n.slots, area: n.area });
+    refreshArea();
+    player.applyLive(cur());
+    persist();
+    sync();
+    draw(lastT);
+    if (was !== s.enabled) onEnabledChange(s.enabled);
   }
 
   function refreshArea() {
@@ -387,6 +403,7 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
     get running() { return player.running; },
     enabled: () => s.enabled,
     setEnabled,
+    applySettings,
     draw,
     player,
     settings: s,
