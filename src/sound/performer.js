@@ -18,6 +18,8 @@ import { makeNoise, playVoice, VOICE_TRIM } from "./synth.js";
  * @property {number} pan        -1…1 (Random Notes; Geographic Mapping pans by longitude)
  * @property {number} [lat]
  * @property {number} [lon]
+ * @property {{lat:number, lon:number, strength:number, strike:number}[]} [members] other strikes on the same video frame
+ *   (strongest first). In flash mode, Geographic Mapping may add a few of them as quiet chord notes.
  *
  * Everything the listener can see about a note that was just played (for the visualizer and tests).
  * @typedef {object} PlayedNote
@@ -32,6 +34,8 @@ import { makeNoise, playVoice, VOICE_TRIM } from "./synth.js";
  * @property {boolean} geographic true when latitude / longitude chose the note and the pan
  * @property {number} repeat     how many times in a row this geographic note has just been struck (0 = first strike)
  * @property {{midi:number, vel:number, length:number}|null} shadow Rich only: the extra quiet chord-tone note
+ * @property {{midi:number, vel:number, length:number, pan:number, strike:number}[]} chord flash mode, Geographic: notes of
+ *   other strikes on the same frame that fall in other note bands
  */
 
 /**
@@ -66,6 +70,15 @@ export function repeatShape(repeat, gap) {
 export const SHADOW_VEL = 0.35;
 export const SHADOW_LEN = 0.5;
 export const SHADOW_GAP = 0.6;
+/**
+ * Flash mode (the studio): every event is one video frame's flash and must be heard. Its main note is never thinned
+ * as a flam and never waits for a free voice (it takes one). Other strikes on the same frame that fall in other note
+ * bands (Geographic Mapping) join as up to CHORD_MAX quiet chord notes, but only into free voices.
+ */
+export const CHORD_MAX = 2;
+export const CHORD_VEL = 0.6;
+export const CHORD_LEN = 0.8;
+
 /** Voices always kept free for main notes: a shadow only plays when it still leaves at least this many free. */
 export const shadowReserve = (limit) => Math.max(2, Math.ceil(limit / 4));
 
@@ -107,9 +120,13 @@ export class Performer {
   shadowsSkipped = 0; // Rich: shadow notes that were wanted but left out (no suitable note, or not enough free voices)
 
   ctx;
-  /** @param {BaseAudioContext} ctx */
-  constructor(ctx) {
+  /**
+   * @param {BaseAudioContext} ctx
+   * @param {{flashes?: boolean}} [opts] flashes: flash mode (see CHORD_MAX); off = Lightning Sound Lab behaviour
+   */
+  constructor(ctx, opts = {}) {
     this.ctx = ctx;
+    this.flashes = opts.flashes === true;
     this.noise = makeNoise(ctx);
     this.input = ctx.createGain();
     this.dry = ctx.createGain();
@@ -219,7 +236,7 @@ export class Performer {
       // (below) and play a note softer when it rubs against a ringing one, but it never swaps the note for another.
       idx = geoNoteIndex(ev.lat, geo, pool.length);
       if (musical) {
-        if (time - this.lastPlayTime < 0.05 && ev.strength < 0.7) return null;
+        if (!this.flashes && time - this.lastPlayTime < 0.05 && ev.strength < 0.7) return null;
         const sounding = this.voices.filter((v) => v.end > time && !this.shadowSet.has(v)).map((v) => v.midi);
         if (sounding.some((m) => clashes(m, pool[idx].midi))) quietener = 0.6;
         if (idx === this.runIdx && ev.t - this.runT <= RUN_GAP) {
@@ -231,8 +248,8 @@ export class Performer {
       // Raw: any note of the scale, straight from the event's random number
       idx = Math.min(pool.length - 1, Math.floor(ev.pitchRand * pool.length));
     } else {
-      // Musical: skip tiny flams, and stay near a gentle “home” chord that moves slowly
-      if (time - this.lastPlayTime < 0.05 && ev.strength < 0.7) return null;
+      // Musical: skip tiny flams (not in flash mode), and stay near a gentle “home” chord that moves slowly
+      if (!this.flashes && time - this.lastPlayTime < 0.05 && ev.strength < 0.7) return null;
       const degrees = SCALES[c.scale].steps.length;
       const home = harmonyDegree(ev.t, seed, degrees);
       const sounding = this.voices.filter((v) => v.end > time).map((v) => v.midi);
@@ -297,7 +314,7 @@ export class Performer {
     /* --- voice limit --- */
     const limit = Math.max(1, Math.floor(c.polyphony));
     if (activeMain >= limit) {
-      if (musical && ev.strength < 0.45) return null; // weak strikes simply wait out
+      if (musical && !this.flashes && ev.strength < 0.45) return null; // weak strikes simply wait out (a flash never does)
       const alive = this.voices.filter((v) => v.end > time);
       // remove the oldest (Raw) or the quietest-oldest (Musical)
       const victim = alive.sort((a, b) => (musical ? a.vel * (a.end - time) - b.vel * (b.end - time) : a.start - b.start))[0];
@@ -332,11 +349,41 @@ export class Performer {
       this.runT = ev.t;
     }
 
+    const chord = this.flashes && geographic && ev.members?.length ? this.playChord(ev, time, c, pool, idx, vel, length, gain, limit, geo, musical) : [];
     const shadow =
       geographic && musical && c.variation === "rich" && repeat > 0
         ? this.playShadow(ev, time, c, seed, pool, idx, vel, length, pan, gain, limit)
         : null;
-    return { eventIndex, simT: ev.t, time, midi, vel, length, voices: count, pan, geographic, repeat, shadow };
+    return { eventIndex, simT: ev.t, time, midi, vel, length, voices: this.activeVoices(time), pan, geographic, repeat, shadow, chord };
+  }
+
+  /**
+   * Flash mode, Geographic: other strikes on the same frame that fall in other note bands sound with the main note, as
+   * quieter, shorter chord notes at their own latitude's note and longitude's pan. At most CHORD_MAX, strongest first,
+   * only into free voices (they never take one from a sounding note) and within the density guard. In Musical mode a
+   * band that would rub against the chord or a ringing note is left out.
+   */
+  playChord(ev, time, c, pool, mainIdx, mainVel, mainLength, gain, limit, geo, musical) {
+    const chosen = [mainIdx];
+    const out = [];
+    const sounding = musical ? this.voices.filter((v) => v.end > time).map((v) => v.midi) : [];
+    for (const m of ev.members) {
+      if (out.length >= CHORD_MAX) break;
+      if (this.recentStarts.length >= MAX_STARTS_PER_SECOND || this.activeVoices(time) >= limit) break;
+      const j = geoNoteIndex(m.lat, geo, pool.length);
+      if (chosen.includes(j)) continue;
+      const midi = pool[j].midi;
+      if (musical && [...chosen.map((k) => pool[k].midi), ...sounding].some((x) => clashes(x, midi))) continue;
+      const vel = Math.min(1, mainVel * CHORD_VEL),
+        length = mainLength * CHORD_LEN,
+        pan = geoPan(m.lon, geo);
+      this.voices.push(playVoice(this.ctx, this.input, c.instrument, { freq: midiToFreq(midi), time, vel, length, pan, gain }, this.noise, midi));
+      this.recentStarts.push(time);
+      chosen.push(j);
+      out.push({ midi, vel, length, pan, strike: m.strike });
+    }
+    if (out.length) this.maxVoices = Math.max(this.maxVoices, this.activeVoices(time));
+    return out;
   }
 
   /**

@@ -1,9 +1,8 @@
 // Live sound for the preview. It runs on the browser's precise audio clock and becomes the preview's
 // clock while sound is on: the picture shows the video time that is being *heard* (the device's output
 // latency and the limiter's look-ahead included), so a flash and its note meet even on slow (e.g.
-// Bluetooth) outputs.
-import { Performer } from "./performer.js";
-import { measureChainDelay, noteTime } from "./render.js";
+// Bluetooth) outputs. Like an export, the sound fades out over the replay's closing hold.
+import { measureChainDelay, noteTime, scheduleFade, studioPerformer } from "./render.js";
 
 const LOOKAHEAD = 0.15; // seconds of audio scheduled in advance
 const TICK_MS = 25;
@@ -34,6 +33,8 @@ export class SoundPlayer {
     this.events = [];
     this.seed = 0;
     this.bounds = null;
+    this.fade = null; // end fade in video seconds (render.js endFade), or null
+    this.fader = null;
     this.running = false;
     this.from = 0; // video time the current run started at
     this.base = 0; // audio-clock time of video time 0 for the current run
@@ -45,12 +46,30 @@ export class SoundPlayer {
   get performer() { return this.perf; }
   get level() { return this.analyser; }
 
-  /** New strikes (another dataset, duration or time range) or listening area. A running pass continues from where it is. */
-  setEvents(events, seed, bounds) {
+  /**
+   * New flashes (another dataset, frame, duration or time range), listening area or end fade. A running pass continues
+   * from where it is.
+   */
+  setEvents(events, seed, bounds, fade = this.fade) {
     this.events = events;
     this.seed = seed;
     this.bounds = bounds;
-    if (this.running) this.nextIdx = lowerBound(events, this.horizon() - this.base);
+    const fadeChanged = JSON.stringify(fade) !== JSON.stringify(this.fade);
+    this.fade = fade;
+    if (!this.running) return;
+    const scheduled = this.horizon() - this.base; // video time already handed to the audio clock
+    this.nextIdx = lowerBound(events, scheduled);
+    if (fadeChanged) this.applyFade(scheduled);
+  }
+
+  /** (Re)plans the end fade on the audio clock from video time `from` on. */
+  applyFade(from) {
+    if (!this.fader) return;
+    if (this.fade) scheduleFade(this.fader.gain, this.fade, this.base, from);
+    else {
+      this.fader.gain.cancelScheduledValues(0);
+      this.fader.gain.setValueAtTime(1, this.base + from);
+    }
   }
 
   setBounds(bounds) { this.bounds = bounds; }
@@ -69,10 +88,12 @@ export class SoundPlayer {
   async start(fromT) {
     if (!this.ctx) {
       this.ctx = new AudioContext({ latencyHint: "interactive" });
-      this.perf = new Performer(this.ctx);
+      this.perf = studioPerformer(this.ctx);
+      this.fader = this.ctx.createGain();
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 1024;
-      this.perf.out.connect(this.analyser);
+      this.perf.out.connect(this.fader);
+      this.fader.connect(this.analyser);
       this.analyser.connect(this.ctx.destination);
       const Offline = globalThis.OfflineAudioContext;
       if (Offline) measureChainDelay(Offline, this.ctx.sampleRate).then((d) => (this.chainDelay = d), () => {});
@@ -85,6 +106,7 @@ export class SoundPlayer {
     this.from = fromT;
     this.base = this.ctx.currentTime + START_DELAY - fromT;
     this.nextIdx = lowerBound(this.events, fromT);
+    this.applyFade(fromT);
     this.running = true;
     this.timer = setInterval(() => this.tick(), TICK_MS);
     this.tick();
@@ -97,7 +119,7 @@ export class SoundPlayer {
   }
 
   /**
-   * Stop scheduling. `ringOut` lets the notes already sounding fade naturally (end of the video);
+   * Stop scheduling. `ringOut` leaves the notes already sounding to the end fade (end of the video);
    * otherwise they fade out quickly (pause, seek).
    */
   stop({ ringOut = false } = {}) {

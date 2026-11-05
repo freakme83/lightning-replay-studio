@@ -340,10 +340,20 @@ the loaded strikes into music with the Lightning Sound Lab engine. The preview, 
 shared, so you always hear the replay you see. Sound is **off** until you tick *Play sound with the replay* (or press the
 🔇 / 🔊 button next to the scrubber); a dot on the Sound tab shows it is on.
 
-- **Frame-exact.** Every note starts on the first video frame that shows its strike's flash: the note time is that
-  frame's time, `frameOf(v, fps) / fps`, from the replay's own time map (`src/core/timeline.js`). Strikes on the same
-  frame sound together, strikes outside the event time range are silent, and changing the video duration re-times the
-  notes exactly like the flashes. Nothing in the Sound tab can change the replay, the strikes or their times.
+- **What you see is what you hear.** Every video frame that shows a new flash in the picture plays, on exactly that
+  frame: the note time is the frame's time, `frameOf(v, fps) / fps`, from the replay's own time map
+  (`src/core/timeline.js`). Strikes outside the picture (outside the map frame, or outside the event time range) are
+  silent, so zooming in on the map also narrows what you hear. Changing the video duration re-times the notes exactly
+  like the flashes. Nothing in the Sound tab can change the replay, the strikes or their times.
+- **One flash per frame.** Strikes that appear on the same frame (common in real detections: many strokes per flash, often
+  on the same millisecond) are one flash: the strongest strike leads (its position chooses the note), and the flash is a
+  little louder for a crowd. With Geographic notes, other strikes of that frame in *other* note bands join as up to two
+  quieter, shorter chord notes (60 % loudness, 80 % length), only into free voices; in Musical mode a band that would rub
+  against the chord is left out. A flash's main note is never thinned out and never waits for a voice: when *Max notes at
+  once* is full it takes the place of an older note.
+- **Ends with the video.** The video keeps the length you set. Over its closing hold (from where the last strike can
+  appear to the end, up to 1.8 s) the sound fades out on an equal-power curve to silence, so ringing notes and reverb
+  are never cut off abruptly. The preview plays the same fade.
 - **Preview clock.** While sound is on and playing, the audio clock drives the preview: the picture shows the moment you
   *hear*, with the device's output latency (also Bluetooth) and the safety limiter's small look-ahead (about 11 ms, measured
   at start) taken into account. Without sound the preview runs as before.
@@ -358,7 +368,8 @@ shared, so you always hear the replay you see. Sound is **off** until you tick *
   the top edge of the picture is the highest note and the left edge the left ear; it follows the frame you set in the Video
   tab (lock the frame to fix it). The panel shows the area, its size and how many km one note covers.
 - **Variation** (Geographic in Musical mode): *Strict* plays every strike's note exactly; *Natural* varies loudness and length of
-  repeated notes; *Rich* adds a quiet chord-tone "shadow" note below some repeats, using spare voices only.
+  repeated notes; *Rich* adds a quiet chord-tone "shadow" note below some repeats, using spare voices only. Because every
+  flash is heard, voices are often all busy in a dense storm: raise *Max notes at once* (e.g. 16–24) to hear Rich's shadows.
 - **Sound character.** Musical or Raw listening mode, four synthesised instruments, eight scales, twelve keys, note length,
   pitch height and range, reverb, maximum notes at once, volume, and six starting points. **A / B** are two complete sound
   settings for the same strikes: switch while it plays to compare.
@@ -366,7 +377,8 @@ shared, so you always hear the replay you see. Sound is **off** until you tick *
   strikes' times and positions) and keeps it in any duration or time range. Same data and settings = the same notes.
 - **No timing pull.** Lightning Sound Lab's *Timing pull* (which delays Random Notes by up to 0.12 s) is always off here,
   because it would move notes off their strikes' frames.
-- **Density guard.** At most 60 notes start per second; strikes held back are counted under the plot (they still flash).
+- **Density guard.** At most 60 notes start per second. One flash per frame stays below that at up to 60 fps; above it, held-back
+  flashes are counted under the plot. Chord notes give way first.
 - The sound settings are kept in the browser (`localStorage`, key `lightning-replay-studio:sound`). This version plays the sound
   in the preview; the exported MP4 is still silent.
 
@@ -477,11 +489,13 @@ U1–U6 (`tests/profiles-ui.test.js`, headless Chrome on the real Studio, bake e
     hostile names, bad imports and delete confirmation; blocked or damaged storage; Update dropping a saved frame and the
     restore-frame choice resetting with each selection.
 6g. An exported MP4 reproduces a custom overlay position, scale and shading, with no editor marks.
-SL1–SL9 (`tests/sound.test.js`, audio rendered offline with `node-web-audio-api`). Sound tab: every note starts on its strike's
-    first visible frame, in every mode, and the audio is silent before it; timing follows the replay's time map while each strike
-    keeps its voicing; listening area from metadata, suggestion or map frame; latitude → note and longitude → pan in either area;
-    clean audio and voice limits for every instrument; Natural / Rich variation rules; determinism and A/B; the live player's
-    scheduling and heard position; sound settings validation and storage.
+SL1–SL12 (`tests/sound.test.js`, audio rendered offline with `node-web-audio-api`). Sound tab: one flash per frame, sounding on
+    exactly that frame in every mode, silent before it; timing follows the replay's time map while each strike keeps its
+    voicing; listening area from metadata, suggestion or map frame; latitude → note and longitude → pan (chord notes too);
+    clean audio and voice limits; Natural / Rich rules; determinism and A/B; the live player's scheduling, heard position and
+    fade; settings; only strikes inside the picture are heard (the geographic rule equals the renderer's pixel rule, also
+    zoomed, shifted and portrait); every flash frame is heard, also in a dense clustered storm and with 1–3 voices; the
+    end fade (silent last samples, nothing audible changed before it, the video keeps its length).
 
 ## Project layout
 

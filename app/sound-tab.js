@@ -1,13 +1,15 @@
 // The Sound tab: turns the loaded replay into music (the Lightning Sound Lab engine, src/sound/).
 // It never changes the replay: it reads the replay model's strikes and follows the preview's transport.
-// Timing comes from the replay's own time map, so every note starts on the first video frame that shows
-// its strike (src/sound/events.js).
+// Timing comes from the replay's own time map: every video frame that shows a new flash in the picture is
+// heard on exactly that frame, nothing outside the picture is heard (src/sound/events.js), and the sound
+// fades out over the closing hold so it ends with the video (src/sound/render.js).
 import {
   INSTRUMENTS, ROOT_NAMES, SCALES, SOUND_PRESETS, VARIATION_MODES, buildPool, noteName, randomMusic,
 } from "/src/sound/music.js";
 import { boundsSizeKm, formatBounds } from "/src/sound/geo.js";
 import { listeningArea } from "/src/sound/area.js";
 import { soundEvents, strikeVoicing } from "/src/sound/events.js";
+import { endFade } from "/src/sound/render.js";
 import { SoundPlayer } from "/src/sound/player.js";
 import { MAX_STARTS_PER_SECOND } from "/src/sound/performer.js";
 import { STUDIO_A, STUDIO_B, defaultSoundSettings, loadSoundSettings, saveSoundSettings, studioMusic } from "/src/sound/settings.js";
@@ -33,7 +35,7 @@ const NOTE_MODE_TEXT = {
 const VARIATION_TEXT = {
   strict: { label: "Strict", hint: "Every strike plays its geographic note exactly." },
   natural: { label: "Natural", hint: "Same notes. Repeated notes vary in loudness and length, and ring shorter when strikes come fast." },
-  rich: { label: "Rich", hint: "Natural, plus a quiet, short chord-tone note below the main note on some repeats (◇). It never replaces a main note." },
+  rich: { label: "Rich", hint: "Natural, plus a quiet, short chord-tone note below the main note on some repeats (◇), only in spare voices: in a busy storm raise Max notes at once to hear them." },
 };
 const AREA_TEXT = {
   data: "The dataset's own capture area, or an area suggested from its strikes. Panning or zooming the map does not change the sound.",
@@ -118,7 +120,7 @@ const VIZ_HTML = `
   <div class="snd-meters">
     <span class="meter" title="Output level">Level <span class="bar"><i id="snd-level"></i></span></span>
     <span title="Notes ringing right now">Notes <b id="snd-voices">0</b></span>
-    <span id="snd-thin-wrap" hidden title="Very dense timing: at most ${MAX_STARTS_PER_SECOND} notes start per second. Strikes held back since the last start are counted here; they still flash in the video.">Held back <b id="snd-thinned">0</b></span>
+    <span id="snd-thin-wrap" hidden title="At most ${MAX_STARTS_PER_SECOND} notes start per second. Flashes held back since the last start are counted here (only possible above ${MAX_STARTS_PER_SECOND} fps).">Held back <b id="snd-thinned">0</b></span>
     <span class="lim" id="snd-limiter" title="Lights up when the safety limiter is gently turning peaks down">Limiter</span>
   </div>
 </div>
@@ -128,7 +130,7 @@ const VIZ_HTML = `
     <canvas id="snd-geo" aria-label="Schematic plot of the listening area and the note ladder"></canvas>
   </div>
 </div>
-<p class="note snd-legend"><span style="color:#fff1b8">▎</span> strike &nbsp;<span style="color:rgb(108,196,255)">●</span> A note &nbsp;<span style="color:rgb(255,200,87)">●</span> B note &nbsp;◇ shadow note (Rich) &nbsp;· geographic plot: up = north, right = east, faint bands = note steps</p>`;
+<p class="note snd-legend"><span style="color:#fff1b8">▎</span> strike &nbsp;<span style="color:rgb(108,196,255)">●</span> A note &nbsp;<span style="color:rgb(255,200,87)">●</span> B note &nbsp;◇ shadow note (Rich) &nbsp;· geographic plot: up = north, right = east, faint bands = note steps, dashed = video frame (only strikes inside it are heard)</p>`;
 
 /**
  * @param {object} o
@@ -152,7 +154,9 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
   let voicing = null, voicingOf = null;
   let events = [];
   let area = null;
-  let eventsKey = "";
+  let timingKey = "";
+  let framesKey = "";
+  let fade = null;
   let notes = []; // played in the current run (for the plots)
   let peak = 0;
 
@@ -160,7 +164,8 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
     getMusic: cur,
     onNote(n) {
       notes.push({ simT: n.simT, midi: n.midi, vel: n.vel, time: n.time, length: n.length, slot: s.active, ev: n.eventIndex, pan: n.pan, geographic: n.geographic, shadow: n.shadow ? { midi: n.shadow.midi, length: n.shadow.length } : undefined });
-      if (notes.length > 900) notes.shift();
+      for (const c of n.chord ?? []) notes.push({ simT: n.simT, midi: c.midi, vel: c.vel, time: n.time, length: c.length, slot: s.active, ev: n.eventIndex, pan: c.pan, geographic: true, chord: true });
+      while (notes.length > 900) notes.shift();
     },
   });
 
@@ -174,28 +179,46 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
     player.setBounds(area.bounds);
   }
 
+  /** Rebuilds the flashes when the timing or the picture changed. */
+  function refreshEvents() {
+    const box = frame ?? model.extent;
+    const key = [timingKey, box.west, box.south, box.east, box.north].join("|");
+    if (key === framesKey) return;
+    framesKey = key;
+    events = soundEvents(model, voicing, box);
+  }
+
   /** New replay model (dataset, duration, time range, …). Returns true when the strikes' timing changed. */
   function setReplay(nextModel, nextDataset, nextFrame) {
     model = nextModel;
     frame = nextFrame ?? null;
     if (nextDataset !== dataset) { dataset = nextDataset; voicing = null; }
-    if (!model || !dataset?.ok) { events = []; area = null; eventsKey = ""; sync(); return false; }
+    if (!model || !dataset?.ok) { events = []; area = null; timingKey = framesKey = ""; fade = null; sync(); return false; }
     if (!voicing || voicingOf !== dataset) { voicing = strikeVoicing(dataset); voicingOf = dataset; }
     const tm = model.timeMap;
     const key = [dataset.events.length, voicing.seed, tm.startMs, tm.endMs, tm.duration, model.settings.fps, model.events.length].join("|");
-    const changed = key !== eventsKey;
-    eventsKey = key;
-    if (changed) events = soundEvents(model, voicing);
+    const changed = key !== timingKey;
+    timingKey = key;
+    fade = endFade(tm);
+    refreshEvents();
     refreshArea();
-    player.setEvents(events, voicing.seed, area?.bounds ?? null);
+    player.setEvents(events, voicing.seed, area?.bounds ?? null, fade);
     sync();
     return changed;
   }
 
-  /** The video's map frame moved (only matters when the listening area is the map frame). */
+  /**
+   * The video's map frame moved: strikes entering or leaving the picture start or stop sounding, and with the
+   * map-frame listening area the note ladder follows the frame.
+   */
   function setFrame(nextFrame) {
     frame = nextFrame ?? null;
-    if (s.area === "frame") { refreshArea(); syncArea(); }
+    if (!model || !voicing) return;
+    refreshEvents();
+    refreshArea();
+    player.setEvents(events, voicing.seed, area?.bounds ?? null, fade);
+    syncArea();
+    draw(lastT);
   }
 
   /* ---------- controls ---------- */
@@ -228,7 +251,7 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
     $("snd-pill").textContent = s.enabled ? `on · ${s.active}` : "off";
     $("snd-pill").classList.toggle("custom", !s.enabled);
     $("snd-enabled-note").textContent = s.enabled
-      ? "Every note starts on the first video frame that shows its strike. Play the preview to hear it."
+      ? "Every frame that shows a new flash in the picture plays on exactly that frame; strikes outside the picture are silent. The sound fades out over the video's closing seconds."
       : "Sound is off: the preview and the video stay silent.";
     pressed("[data-slot]", "slot", s.active);
     for (const k of ["A", "B"]) $(`snd-sub-${k}`).textContent = describe(s.slots[k]);
@@ -240,8 +263,8 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
     $("snd-variation-note").textContent = VARIATION_TEXT[c.variation].hint + (applies || c.variation === "strict" ? "" : " Not active now: it applies to Geographic Mapping in Musical mode.");
     pressed("[data-mode]", "mode", c.mode);
     $("snd-mode-note").textContent = c.mode === "musical"
-      ? "Musical: gentle dynamics; tiny weak flams within 50 ms are thinned out; a note that would rub against a ringing one plays softer."
-      : "Raw: every strike plays, limited only by Max notes at once.";
+      ? "Musical: gentle dynamics; a note that would rub against a ringing one plays softer; in a full chord, clashing notes are left out."
+      : "Raw: plain loudness straight from the strikes.";
     pressed("[data-inst]", "inst", c.instrument);
     $("snd-scale").value = c.scale;
     $("snd-root").value = String(c.root);
@@ -259,6 +282,7 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
     player.applyLive(cur());
     persist();
     sync();
+    draw(lastT); // the plots follow a change at once, also while paused
   }
 
   $("snd-enabled").addEventListener("change", (e) => setEnabled(e.target.checked));
@@ -315,7 +339,9 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
 
   /* ---------- plots ---------- */
   const notesCanvas = $("snd-notes"), geoCanvas = $("snd-geo");
+  let lastT = 0;
   function draw(t) {
+    lastT = t;
     if (viz.hidden) return;
     const c = cur();
     const now = player.audioContext?.currentTime ?? 0;
@@ -326,6 +352,7 @@ export function createSoundTab({ panel, viz, storage, onEnabledChange }) {
     const flash = last && player.running ? Math.max(0, 1 - (now - last.time) / 0.35) : 0;
     drawViz(notesCanvas, events, shown, t, now, [lo - 2, hi + 2], flash, model?.settings.duration ?? 20);
     drawGeo(geoCanvas, {
+      frame: frame ?? model?.extent ?? null,
       bounds: area?.bounds ?? null, events, pos: t, now, notes: shown,
       ladder: c.noteMode === "geographic" ? pool.map((p) => p.midi) : null, slot: s.active,
     });

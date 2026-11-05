@@ -1,6 +1,7 @@
 // The bridge between the replay and the sound: turns the replay model's strikes into the events the
 // Performer plays. Timing comes ONLY from the replay's own time map (src/core/timeline.js), so a note
-// can never drift from the strike it belongs to, in the preview or in an export.
+// can never drift from the strike it belongs to, in the preview or in an export. The rule: every frame
+// that shows a new flash in the picture is heard, and nothing is heard that the picture does not show.
 import { mulberry32 } from "./rng.js";
 import { groupBursts } from "./geo.js";
 
@@ -47,27 +48,57 @@ export function strikeVoicing(dataset) {
 export const flashTime = (timeMap, v, fps) => timeMap.frameOf(v, fps) / fps;
 
 /**
- * The strikes of a replay model as sound events, in time order.
- * Each note starts exactly on the first video frame that shows its strike's flash, so sound and picture
- * meet on the same frame. Strikes on the same frame sound together. Flash grouping (bursts) follows the
- * playback gaps, because that is what the ear perceives after stretching or squeezing the storm.
+ * Is a strike inside the video frame? The frame is stored as the geographic edges of the whole picture (Web Mercator:
+ * longitude and latitude are monotonic in x and y), so this is exactly "its projected position is in the picture".
+ */
+export const inPicture = (e, frame) => e.lat >= frame.south && e.lat <= frame.north && e.lon >= frame.west && e.lon <= frame.east;
+
+/** Loudness of a frame's flash from the strikes on it: the strongest one, a little louder for a crowd (never above 1). */
+export const flashStrength = (strengths) => Math.min(1, Math.max(...strengths) * (1 + 0.15 * Math.log2(strengths.length)));
+
+/**
+ * The strikes of a replay model as sound events: one event per video frame that shows a new flash, in time order.
+ *  - Only strikes inside the video frame (`frame`, else the model's own extent) can be heard: no sound without a
+ *    visible flash.
+ *  - The event sounds exactly on that frame, so sound and picture meet on the same frame.
+ *  - Strikes on the same frame are one flash: the strongest strike leads (its position, its random numbers), the
+ *    others are its `members` (strongest first), and the flash is a little louder for a crowd.
+ * Bursts (runs of flashes) follow the playback gaps, because that is what the ear perceives after stretching or
+ * squeezing the storm.
  * @returns {readonly import("./performer.js").SoundEvent[]}
  */
-export function soundEvents(model, voicing) {
+export function soundEvents(model, voicing, frame = null) {
   const fps = model.settings.fps;
-  const times = model.events.map((e) => flashTime(model.timeMap, e.v, fps));
-  const { index: burstIndex, size: burstSize } = groupBursts(times);
+  const box = frame ?? model.extent;
+  const fallback = { strength: 0.5, pitchRand: 0.5, velRand: 0.5, pan: 0 };
+  const groups = new Map(); // frame number -> strikes on it (model order = time order)
+  for (const e of model.events) {
+    if (!inPicture(e, box)) continue;
+    const f = model.timeMap.frameOf(e.v, fps);
+    const strike = { e, voice: voicing.byIndex.get(e.index) ?? fallback };
+    const g = groups.get(f);
+    if (g) g.push(strike);
+    else groups.set(f, [strike]);
+  }
+  const frames = [...groups.keys()]; // ascending: events are in time order and frameOf is monotonic
+  const { index: burstIndex, size: burstSize } = groupBursts(frames.map((f) => f / fps));
   return Object.freeze(
-    model.events.map((e, i) =>
-      Object.freeze({
-        t: times[i],
-        strike: e.index,
-        ...(voicing.byIndex.get(e.index) ?? { strength: 0.5, pitchRand: 0.5, velRand: 0.5, pan: 0 }),
+    frames.map((f, i) => {
+      const strikes = [...groups.get(f)].sort((a, b) => b.voice.strength - a.voice.strength || a.e.v - b.e.v);
+      const [lead, ...rest] = strikes;
+      return Object.freeze({
+        t: f / fps,
+        frame: f,
+        strike: lead.e.index,
+        strikes: Object.freeze(strikes.map((s) => s.e.index)),
+        ...lead.voice,
+        strength: flashStrength(strikes.map((s) => s.voice.strength)),
         burstIndex: burstIndex[i],
         burstSize: burstSize[i],
-        lat: e.lat,
-        lon: e.lon,
-      }),
-    ),
+        lat: lead.e.lat,
+        lon: lead.e.lon,
+        members: Object.freeze(rest.map((s) => Object.freeze({ lat: s.e.lat, lon: s.e.lon, strength: s.voice.strength, strike: s.e.index }))),
+      });
+    }),
   );
 }

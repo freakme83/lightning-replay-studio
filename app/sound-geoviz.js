@@ -74,6 +74,15 @@ export function drawGeo(canvas, v) {
   }
   g.strokeStyle = "rgba(255,255,255,0.14)";
   g.strokeRect(px0 + 0.5, py0 + 0.5, px1 - px0 - 1, py1 - py0 - 1);
+  // the video frame: only strikes inside it are heard
+  if (v.frame) {
+    const fx0 = cx(v.frame.west), fx1 = cx(v.frame.east), fy0 = cy(v.frame.north), fy1 = cy(v.frame.south);
+    g.save();
+    g.setLineDash([4, 3]);
+    g.strokeStyle = "rgba(63,224,204,0.55)";
+    g.strokeRect(fx0 + 0.5, fy0 + 0.5, Math.max(0, fx1 - fx0 - 1), Math.max(0, fy1 - fy0 - 1));
+    g.restore();
+  }
 
   // events: dim = still to come, bright = already happened, line = the most recent path
   const played = [];
@@ -82,10 +91,12 @@ export function drawGeo(canvas, v) {
     if (e.t > v.pos) break; // events are sorted by time
     played.push(i);
   }
+  // every strike of a flash (the lead and the others on the same frame)
+  const points = (e) => [e, ...(e.members ?? [])];
   for (const e of v.events) {
     if (e.t <= v.pos) continue;
     g.fillStyle = "rgba(150,165,190,0.28)";
-    g.fillRect(cx(e.lon) - 1, cy(e.lat) - 1, 2, 2);
+    for (const p of points(e)) g.fillRect(cx(p.lon) - 1, cy(p.lat) - 1, 2, 2);
   }
   const trail = played.slice(-24);
   if (trail.length > 1) {
@@ -101,7 +112,10 @@ export function drawGeo(canvas, v) {
     const e = v.events[i];
     g.fillStyle = "rgba(255,241,184,0.55)";
     g.beginPath();
-    g.arc(cx(e.lon), cy(e.lat), 2, 0, Math.PI * 2);
+    for (const p of points(e)) {
+      g.moveTo(cx(p.lon) + 2, cy(p.lat));
+      g.arc(cx(p.lon), cy(p.lat), 2, 0, Math.PI * 2);
+    }
     g.fill();
   }
 
