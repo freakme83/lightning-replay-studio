@@ -12,10 +12,12 @@
     "test": "node --test tests/*.test.js",
     "test:map": "node --test tests/map.test.js",
     "test:render": "node --test tests/render.test.js",
-    "test:formats": "node --test tests/formats.test.js"
+    "test:formats": "node --test tests/formats.test.js",
+    "test:sound": "node --test tests/sound.test.js"
   },
   "devDependencies": {
-    "hyperframes": "0.8.226"
+    "hyperframes": "0.8.226",
+    "node-web-audio-api": "2.2.0"
   },
   "dependencies": {
     "@fontsource/inter": "5.2.6",

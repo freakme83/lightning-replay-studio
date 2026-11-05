@@ -18,6 +18,7 @@ import { createProfilesUi } from "./profiles-ui.js";
 import { createProfileStore } from "/src/profiles/profile-store.js";
 import { captureSettings, normalizeProfileSettings } from "/src/profiles/profile.js";
 import { LAYER_GROUPS, WATER_BRIGHTNESS, WATER_PRESETS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
+import { createSoundTab } from "./sound-tab.js";
 
 const $ = (id) => document.getElementById(id);
 const tableWrap = $("ev-body").closest(".table-wrap");
@@ -55,9 +56,46 @@ const state = {
   composer: null,
   selected: null,
   lastRowNow: -1,
+  tab: "video", // "video" (the replay and its export) | "sound" (the music made from the strikes)
 };
 let profilesUi = null; // Studio Profiles panel (created at the end); told whenever a saved setting may have changed
 const settingsChanged = () => profilesUi?.refresh();
+
+// ---------- sound ----------
+// The Sound tab plays the strikes as music. While sound is on and playing, the audio clock drives the
+// preview (state.t), so the picture shows the video time that is being heard.
+const sound = createSoundTab({
+  panel: $("sound-panel"),
+  viz: $("sound-viz"),
+  storage: (() => { try { return window.localStorage; } catch { return null; } })(),
+  onEnabledChange(on) {
+    syncSoundToggle();
+    if (!state.playing) return;
+    if (on) sound.start(state.t);
+    else sound.stop();
+  },
+});
+function syncSoundToggle() {
+  const on = sound.enabled();
+  $("sound-toggle").textContent = on ? "🔊" : "🔇";
+  $("sound-toggle").setAttribute("aria-pressed", String(on));
+  $("sound-toggle").title = on ? "Sound on: click to mute (set it up in the Sound tab)" : "Sound off: click to play the strikes as music (set it up in the Sound tab)";
+  $("tab-sound-dot").hidden = !on;
+}
+/** Playback needs a locked frame in the Video tab; the Sound tab can also play while the frame is being composed. */
+const canPlay = () => !!state.model && (state.mode === "locked" || state.tab === "sound");
+function setTab(tab) {
+  if (tab === state.tab) return;
+  state.tab = tab;
+  for (const b of document.querySelectorAll("[data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+  $("video-panel").hidden = tab !== "video";
+  $("sound-panel").hidden = tab !== "sound";
+  $("strikes-panel").hidden = tab !== "video";
+  $("sound-viz").hidden = tab !== "sound";
+  if (state.playing && !canPlay()) pause();
+  updateFrameUi();
+  draw();
+}
 
 // ---------- geography & fonts ----------
 async function loadGeo() {
@@ -108,6 +146,7 @@ function rebuild({ keepTime = true } = {}) {
   try {
     state.model = buildReplay(state.dataset, readSettings(), { ...state.geo, mapImage: state.mapImage });
   } catch (e) {
+    sound.setReplay(null, state.dataset, state.frame);
     $("messages").querySelectorAll(".msg.settings").forEach((n) => n.remove());
     message("error settings", esc(e.message));
     return;
@@ -117,6 +156,8 @@ function rebuild({ keepTime = true } = {}) {
   // A fresh load opens on the end of the opening fade, just before the first strike can appear.
   const fps = m.settings.fps;
   state.t = keepTime ? Math.min(m.settings.duration, frac * m.settings.duration) : Math.floor(m.timeMap.leadIn * fps) / fps;
+  // New strike timing (duration, time range, dataset): a sounding preview continues from the same place.
+  if (sound.setReplay(m, state.dataset, state.frame) && state.playing && sound.running) sound.start(state.t);
   $("scrub").max = m.settings.duration;
   $("scale-val").textContent = `${m.settings.markerScale.toFixed(1)}×`;
   showFrameEdges(m.extent);
@@ -229,7 +270,7 @@ function updateFrameUi() {
     ? "Frame locked: the preview below is exactly what the MP4 will show."
     : `Drag to pan, scroll or +/− to zoom. The bright rectangle is the ${FORMATS[state.format].ratio} video frame; hatched bands sit under the HUD${state.format === "portrait" ? " and the platform's top/bottom interface areas" : ""}.`;
   $("outline-row").hidden = !failed && !layersFailed && !(state.composer && !state.composer.online());
-  for (const id of ["play", "prev", "next", "scrub"]) $(id).disabled = !locked;
+  for (const id of ["play", "prev", "next", "scrub"]) $(id).disabled = !canPlay();
   $("edit-layout").disabled = $("edit-layout-side").disabled = !locked || !state.model;
   $("edit-layout").title = locked ? "Move, resize and lock overlays directly on the preview" : "Lock the frame first: overlays are edited on the locked preview";
   updateExportButton();
@@ -741,6 +782,7 @@ function draw() {
   $("readout").textContent = `${state.t.toFixed(2)} / ${m.settings.duration} s · f${Math.round(state.t * fps)} · ${now.time} ${now.zone}`;
   $("scrub").value = state.t;
   markRows();
+  sound.draw(state.t);
 }
 
 // ---------- event table ----------
@@ -809,25 +851,29 @@ let lastTs = null;
 function tick(ts) {
   if (!state.playing) return;
   const m = state.model;
-  if (lastTs !== null) state.t += (ts - lastTs) / 1000;
+  // With sound, the audio clock is the master: the picture shows the moment being heard.
+  if (sound.running) state.t = sound.position();
+  else if (lastTs !== null) state.t += (ts - lastTs) / 1000;
   lastTs = ts;
   if (state.t >= m.settings.duration) {
     state.t = m.settings.duration;
-    pause();
+    pause({ ringOut: true }); // the last notes fade naturally
   }
   draw();
   if (state.playing) requestAnimationFrame(tick);
 }
 function play() {
-  if (!state.model || state.mode !== "locked") return;
+  if (!canPlay()) return;
   if (state.t >= state.model.settings.duration - 1e-3) state.t = 0;
   state.playing = true;
   state.selected = null;
   lastTs = null;
   $("play").textContent = "❚❚";
+  sound.start(state.t);
   requestAnimationFrame(tick);
 }
-function pause() {
+function pause({ ringOut = false } = {}) {
+  sound.stop({ ringOut });
   state.playing = false;
   $("play").textContent = "▶";
   // Snap to the export frame grid so a paused preview shows exactly an exported frame.
@@ -927,11 +973,15 @@ $("apply-bounds").addEventListener("click", () => {
   enterCompose(state.frame);
 });
 $("play").addEventListener("click", () => (state.playing ? pause() : play()));
+$("sound-toggle").addEventListener("click", () => sound.setEnabled(!sound.enabled()));
+for (const b of document.querySelectorAll("[data-tab]")) b.addEventListener("click", () => setTab(b.dataset.tab));
+syncSoundToggle();
 $("prev").addEventListener("click", () => stepEvent(-1));
 $("next").addEventListener("click", () => stepEvent(1));
 $("scrub").addEventListener("input", (e) => {
   if (!state.model) return;
   state.playing = false;
+  sound.stop();
   $("play").textContent = "▶";
   const fps = state.model.settings.fps;
   state.t = Math.round(Number(e.target.value) * fps) / fps;
@@ -968,6 +1018,7 @@ createComposer({
   onChange: (frame, camera) => {
     if (state.mode !== "compose") return;
     state.frame = frame;
+    sound.setFrame(frame);
     state.cameraZoom = camera.zoom;
     updateLayersState();
     showFrameEdges(frame);
@@ -1094,4 +1145,4 @@ function applyProfile(profile, { restoreFrame = false } = {}) {
 
 profilesUi = createProfilesUi({ $, store: profileStore, capture: captureProfile, apply: applyProfile });
 
-window.__studio = { profileStore, captureProfile, applyProfile, state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame, setLayers, bakeMap, setFormat, setQuality, setOverlays, setShading, setEditing, editor, editorGeometry };
+window.__studio = { sound, setTab, profileStore, captureProfile, applyProfile, state, seekToEvent, autoBounds, lockFrame, enterCompose, fitToDataFrame, setLayers, bakeMap, setFormat, setQuality, setOverlays, setShading, setEditing, editor, editorGeometry };
