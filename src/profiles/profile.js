@@ -1,10 +1,13 @@
 // Studio Profiles: a named, reusable composition. A profile holds the *look* of a video (format,
 // quality, map layers and water appearance, overlays, per-format overlay layouts, HUD shading,
-// grid, replay timing) and nothing about a particular storm: no strikes, no playback position, no
-// images. The optional geographic frame is the one geography-specific field and is only present
-// when the user asked to save it.
+// grid, replay timing, and since schema 2 the Sound tab's settings) and nothing about a particular
+// storm: no strikes, no playback position, no images. The optional geographic frame is the one
+// geography-specific field and is only present when the user asked to save it.
 //
-//   { schemaVersion: 1, id, name, createdAt, updatedAt, settings }
+//   { schemaVersion: 2, id, name, createdAt, updatedAt, settings }
+//
+// Schema 1 profiles (before sound) still load: they have no `sound`, and applying one switches sound
+// off and leaves the sound slots as they are.
 //
 // Everything here is pure and DOM-free, so the browser Studio and the tests share it. All input
 // (storage, imported files) is untrusted: it is parsed with a size cap and every field is passed
@@ -15,8 +18,9 @@ import { normalizeLayout, DEFAULT_SHADING } from "../core/hud.js";
 import { validateBounds } from "../core/projection.js";
 import { DEFAULTS } from "../core/replay.js";
 import { normalizeLayers } from "../map/layers.js";
+import { sanitizeSoundSettings } from "../sound/settings.js";
 
-export const PROFILE_SCHEMA_VERSION = 1;
+export const PROFILE_SCHEMA_VERSION = 2;
 /** Marker of an exported file, so a random JSON file is recognised as "not a profile". */
 export const PROFILE_FILE_KIND = "lightning-replay-studio-profile";
 export const PROFILE_LIMITS = Object.freeze({ maxBytes: 256 * 1024, nameLength: 60, maxProfiles: 50 });
@@ -82,6 +86,8 @@ export function normalizeProfileSettings(input) {
   };
   const frame = normalizeFrame(s.frame);
   if (frame) out.frame = frame;
+  // Sound (schema 2): present only when the input has it, so a schema 1 profile stays "no sound settings".
+  if (s.sound && typeof s.sound === "object" && !Array.isArray(s.sound)) out.sound = sanitizeSoundSettings(s.sound);
   return out;
 }
 
@@ -97,6 +103,7 @@ export function captureSettings(current, { includeFrame = false } = {}) {
     grid: current.grid,
     replay: current.replay,
     frame: includeFrame ? current.frame : null,
+    sound: current.sound,
   });
 }
 
@@ -118,10 +125,11 @@ export function toReplaySettings(settings) {
   };
 }
 
-/** Do two settings objects describe the same composition? (`frame` counts only when both saved one.) */
+/** Do two settings objects describe the same composition? (`frame` and `sound` count only when both have one.) */
 export function sameSettings(a, b) {
   const x = normalizeProfileSettings(a), y = normalizeProfileSettings(b);
   if (!(x.frame && y.frame)) delete x.frame, delete y.frame;
+  if (!(x.sound && y.sound)) delete x.sound, delete y.sound;
   return JSON.stringify(x) === JSON.stringify(y);
 }
 

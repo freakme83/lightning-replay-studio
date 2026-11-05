@@ -40,6 +40,9 @@ export function sanitizeSoundSettings(raw) {
   };
 }
 
+/** Sound can be exported for videos up to this long (the whole sound is rendered at once, in memory). */
+export const SOUND_MAX_SECONDS = 600;
+
 const KEY = "lightning-replay-studio:sound";
 
 /** Settings from browser storage (defaults when storage is blocked, empty or unreadable). */

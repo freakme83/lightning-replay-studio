@@ -13,17 +13,17 @@
     "test:map": "node --test tests/map.test.js",
     "test:render": "node --test tests/render.test.js",
     "test:formats": "node --test tests/formats.test.js",
-    "test:sound": "node --test tests/sound.test.js"
+    "test:sound": "node --test tests/sound.test.js tests/sound-export.test.js"
   },
   "devDependencies": {
-    "hyperframes": "0.8.226",
-    "node-web-audio-api": "2.2.0"
+    "hyperframes": "0.8.226"
   },
   "dependencies": {
     "@fontsource/inter": "5.2.6",
     "@fontsource/jetbrains-mono": "5.2.6",
     "gsap": "3.13.0",
     "maplibre-gl": "^6.16.0",
+    "node-web-audio-api": "2.2.0",
     "puppeteer-core": "^25.16.0",
     "topojson-client": "3.1.0",
     "world-atlas": "2.0.2"

@@ -19,6 +19,7 @@ import { createProfileStore } from "/src/profiles/profile-store.js";
 import { captureSettings, normalizeProfileSettings } from "/src/profiles/profile.js";
 import { LAYER_GROUPS, WATER_BRIGHTNESS, WATER_PRESETS, defaultLayers, layersKey, normalizeLayers } from "/src/map/layers.js";
 import { createSoundTab } from "./sound-tab.js";
+import { SOUND_MAX_SECONDS } from "/src/sound/settings.js";
 
 const $ = (id) => document.getElementById(id);
 const tableWrap = $("ev-body").closest(".table-wrap");
@@ -68,8 +69,11 @@ const sound = createSoundTab({
   panel: $("sound-panel"),
   viz: $("sound-viz"),
   storage: (() => { try { return window.localStorage; } catch { return null; } })(),
+  onChange: () => settingsChanged(), // the profile badge notices sound changes too
   onEnabledChange(on) {
     syncSoundToggle();
+    syncExportLabel();
+    updateExportButton();
     if (!state.playing) return;
     if (on) sound.start(state.t);
     else sound.stop();
@@ -158,6 +162,8 @@ function rebuild({ keepTime = true } = {}) {
   state.t = keepTime ? Math.min(m.settings.duration, frac * m.settings.duration) : Math.floor(m.timeMap.leadIn * fps) / fps;
   // New strike timing (duration, time range, dataset): a sounding preview continues from the same place.
   if (sound.setReplay(m, state.dataset, state.frame) && state.playing && sound.running) sound.start(state.t);
+  syncExportLabel(); // a longer video may exceed what sound can be exported for
+  updateExportButton();
   $("scrub").max = m.settings.duration;
   $("scale-val").textContent = `${m.settings.markerScale.toFixed(1)}×`;
   showFrameEdges(m.extent);
@@ -284,13 +290,31 @@ function exportMap() {
   return $("use-outline").checked ? { fallback: "outline" } : null;
 }
 
+/** Sound is exported for videos up to SOUND_MAX_SECONDS; a reason when the current one is too long, else null. */
+function soundTooLong() {
+  const d = state.model?.settings.duration ?? 0;
+  return sound.enabled() && d > SOUND_MAX_SECONDS
+    ? `Sound can be exported for videos up to ${SOUND_MAX_SECONDS / 60} minutes (${SOUND_MAX_SECONDS} s; this one is ${Math.round(d)} s). Shorten the video, or switch sound off to export it silent.`
+    : null;
+}
+
 function updateExportButton() {
   const ready = !!exportMap();
-  $("export").disabled = !state.dataset || !ready;
-  $("export").title = ready ? ""
+  const tooLong = soundTooLong();
+  $("export").disabled = !state.dataset || !ready || !!tooLong;
+  $("export").title = tooLong ?? (ready ? ""
     : state.mode !== "locked" ? "Lock the frame first"
     : state.mapBusy || (state.mapImage && !state.mapError) ? "Waiting for the map to finish updating"
-    : "Map not prepared — tick the offline outline option to export anyway";
+    : "Map not prepared — tick the offline outline option to export anyway");
+}
+
+/** Export button and note: with sound when the Sound tab's sound is on. */
+function syncExportLabel() {
+  const o = outSize(), q = QUALITIES[state.quality], on = sound.enabled();
+  $("export").textContent = `Export ${q.id === "hd" ? "Full HD" : "Draft"} MP4${on ? " with sound" : ""}`;
+  $("export-note").textContent = `${o.width} × ${o.height} · ${DEFAULTS.fps} fps · H.264 yuv420p, ${q.id === "hd" ? "CRF-based" : "fast draft"} encode, rendered locally by HyperFrames with the locked map frame.`
+    + (on ? ` Sound: AAC 256 kbit/s, 48 kHz stereo, slot ${sound.settings.active}, every flash on its frame, fading out with the video.` : " Silent (switch sound on in the Sound tab).")
+    + (soundTooLong() ? ` ${soundTooLong()}` : "");
 }
 
 function enterCompose(frame) {
@@ -388,11 +412,10 @@ function syncFormatControls() {
   for (const b of $("quality-seg").children) b.setAttribute("aria-checked", String(b.dataset.quality === state.quality));
   $("format-pill").textContent = `${o.width} × ${o.height}`;
   $("format-size").textContent = `${o.width} × ${o.height} px · ${f.ratio} · ${DEFAULTS.fps} fps · ${q.id === "hd" ? "Full HD: the map is rendered at this size" : "Draft: half size, fast encode"}`;
-  $("export-note").textContent = `${o.width} × ${o.height} · ${DEFAULTS.fps} fps · H.264 yuv420p, ${q.id === "hd" ? "CRF-based" : "fast draft"} encode, rendered locally by HyperFrames with the locked map frame.`;
   $("frame-label").textContent = `VIDEO FRAME · ${o.width}×${o.height} · ${f.ratio}`;
   $("edges-note").textContent = `Edges are widened on one axis to keep the ${f.ratio} video shape.`;
   $("stage-col").dataset.format = state.format;
-  $("export").textContent = `Export ${q.id === "hd" ? "Full HD" : "Draft"} MP4`;
+  syncExportLabel();
   settingsChanged();
 }
 
@@ -898,6 +921,7 @@ async function startExport() {
       filename: state.filename,
       settings: readSettings(),
       map: exportMap(),
+      sound: sound.enabled() ? sound.settings : null,
     }),
   });
   const body = await res.json();
@@ -912,8 +936,9 @@ async function poll(id) {
   const box = $("export-status");
   const job = await fetch(`/api/export/${id}`).then((r) => r.json());
   const pct = [...job.log.matchAll(/(\d{1,3})%/g)].pop()?.[1];
-  if (job.status === "rendering" || job.status === "building") {
-    box.innerHTML = `Rendering with HyperFrames… ${pct ? pct + "% · " : ""}${job.elapsed.toFixed(0)} s<pre>${esc(job.log.split("\n").slice(-6).join("\n"))}</pre>`;
+  if (job.status === "rendering" || job.status === "building" || job.status === "sound") {
+    const what = job.status === "sound" ? "Adding the sound…" : `Rendering with HyperFrames… ${pct ? pct + "% · " : ""}`;
+    box.innerHTML = `${what}${job.elapsed.toFixed(0)} s<pre>${esc(job.log.split("\n").slice(-6).join("\n"))}</pre>`;
     setTimeout(() => poll(id), 1000);
     return;
   }
@@ -924,7 +949,11 @@ async function poll(id) {
   }
   const p = job.probe;
   const verdict = job.problems.length ? `<span class="bad">Check failed: ${esc(job.problems.join("; "))}</span>` : `<span class="ok">Verified with ffprobe ✓</span>`;
-  box.innerHTML = `${verdict}<br><span class="note">${p.codec} ${p.width}×${p.height} · ${p.fps} fps · ${p.duration.toFixed(2)} s · ${p.frames} frames · ${(p.bytes / 1e6).toFixed(1)} MB · ${job.elapsed.toFixed(0)} s</span><br><a href="${job.output}" download>Download ${esc(job.output.split("/").pop())}</a><video src="${job.output}" controls muted></video>`;
+  const a = p.audio;
+  // The bit rate shown is the one requested from the encoder; ffprobe's average is lower when the sound is sparse.
+  const audio = a ? ` · ${a.codec.toUpperCase()} ${Math.round(a.sampleRate / 1000)} kHz ${a.channels === 2 ? "stereo" : `${a.channels} ch`}${job.sound ? ` ${parseInt(job.sound.bitrate, 10)} kbit/s` : ""}` : " · no sound";
+  const notes = job.sound ? `<br><span class="note">Sound: slot ${esc(job.sound.slot)} · ${job.sound.flashes} flashes · ${job.sound.notes} notes${job.sound.chordNotes ? ` + ${job.sound.chordNotes} chord notes` : ""} · aligned to the frames</span>` : "";
+  box.innerHTML = `${verdict}<br><span class="note">${p.codec} ${p.width}×${p.height} · ${p.fps} fps · ${p.duration.toFixed(2)} s · ${p.frames} frames${audio} · ${(p.bytes / 1e6).toFixed(1)} MB · ${job.elapsed.toFixed(0)} s</span>${notes}<br><a href="${job.output}" download>Download ${esc(job.output.split("/").pop())}</a><video src="${job.output}" controls${a ? "" : " muted"}></video>`;
 }
 
 // ---------- wiring ----------
@@ -1074,6 +1103,7 @@ function captureProfile({ includeFrame = false } = {}) {
       grid: state.grid,
       replay: { duration: $("duration").value, trailMinutes: $("trail").value, markerScale: $("scale").value, showHistory: $("history").checked },
       frame: state.dataset ? state.frame : null,
+      sound: sound.settings,
     },
     { includeFrame },
   );
@@ -1101,6 +1131,9 @@ function applyProfile(profile, { restoreFrame = false } = {}) {
   $("history").checked = s.replay.showHistory;
   state.format = s.format;
   state.quality = s.quality;
+  // Sound: a profile from before sound (schema 1) has none, and applying it switches sound off; the slots stay.
+  if (s.sound) sound.applySettings(s.sound);
+  else sound.setEnabled(false);
 
   syncLayerControls();
   syncOverlayControls();

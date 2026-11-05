@@ -88,19 +88,26 @@ export async function measureChainDelay(OfflineAudioContext, sampleRate = 48000)
 }
 
 /**
- * Renders the sound of a whole replay into an AudioBuffer: sample 0 is video time 0, and the buffer is exactly
- * `duration` seconds long (the video's length). `fade` (see endFade) fades it out at the end; null leaves it unfaded.
- * Works with the browser's OfflineAudioContext or any implementation of it (tests use node-web-audio-api).
- * @returns {Promise<{buffer: AudioBuffer, notes: import("./performer.js").PlayedNote[], performer: Performer}>}
+ * Renders the sound of a whole replay. `fade` (see endFade) fades it out at the end; null leaves it unfaded.
+ * `lead` compensates the output chain's delay (see measureChainDelay): the render runs `lead` seconds longer and
+ * `channels` drops them from the start, so in `channels` a note scheduled at video time t is heard exactly at t and the
+ * fade lands on the video's own times. `channels` holds exactly `duration` seconds (the video's length) per channel;
+ * sample 0 is video time 0. `buffer` is the raw render (with the delay, `lead` seconds longer).
+ * Works with the browser's OfflineAudioContext or any implementation of it (tests and exports use node-web-audio-api).
+ * @returns {Promise<{buffer: AudioBuffer, channels: Float32Array[], notes: import("./performer.js").PlayedNote[], performer: Performer}>}
  */
-export async function renderSound({ OfflineAudioContext, events, music, seed, bounds, duration, fade = null, sampleRate = 48000, channels = 2 }) {
-  const ctx = new OfflineAudioContext(channels, Math.max(1, Math.round(duration * sampleRate)), sampleRate);
+export async function renderSound({ OfflineAudioContext, events, music, seed, bounds, duration, fade = null, lead = 0, sampleRate = 48000, channels = 2 }) {
+  const skip = Math.max(0, Math.round(lead * sampleRate));
+  const length = Math.max(1, Math.round(duration * sampleRate));
+  const ctx = new OfflineAudioContext(channels, length + skip, sampleRate);
   const performer = studioPerformer(ctx);
   const out = ctx.createGain();
   performer.out.connect(out);
   out.connect(ctx.destination);
-  if (fade) scheduleFade(out.gain, fade, 0, 0);
+  if (fade) scheduleFade(out.gain, fade, skip / sampleRate, 0);
   const notes = scheduleAll(performer, events, music, seed, bounds, 0);
   const buffer = await ctx.startRendering();
-  return { buffer, notes, performer };
+  const data = [];
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) data.push(buffer.getChannelData(ch).slice(skip, skip + length));
+  return { buffer, channels: data, notes, performer };
 }
